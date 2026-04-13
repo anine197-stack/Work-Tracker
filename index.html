@@ -19,26 +19,62 @@ textarea{resize:vertical}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useCallback,useRef} = React;
+const {useState,useEffect,useCallback} = React;
 
-// ── Constants ─────────────────────────────────────────────
-const CATS = [
-  {key:"core",    label:"核心价值", color:"#2563eb", desc:"管理分析、Agent开发、制度建设"},
-  {key:"routine", label:"常规运营", color:"#059669", desc:"日常记账、报税、审批"},
-  {key:"fragment",label:"碎片响应", color:"#d97706", desc:"临时沟通、被打断、救火"},
+const CATS=[
+  {key:"core",    label:"核心价值",color:"#2563eb",desc:"管理分析、Agent开发、制度建设"},
+  {key:"routine", label:"常规运营",color:"#059669",desc:"日常记账、报税、审批"},
+  {key:"fragment",label:"碎片响应",color:"#d97706",desc:"临时沟通、被打断、救火"},
 ];
-const URGENCY = ["不急","一般","紧急"];
-const VALUE   = ["低","中","高"];
-const today   = () => new Date().toISOString().slice(0,10);
-const fmtMins = m => m >= 60 ? `${m/60}h` : `${m}m`;
-const daysBetween = d => Math.floor((new Date(today())-new Date(d))/86400000);
+const URGENCY=["不急","一般","紧急"];
+const VALUE=["低","中","高"];
+const today=()=>new Date().toISOString().slice(0,10);
+const fmtMins=m=>m>=60?`${m/60}h`:`${m}m`;
 
-// ── LocalStorage ──────────────────────────────────────────
-const LS = {
-  get:(k)=>{ try{const v=localStorage.getItem(k); return v?JSON.parse(v):null}catch{return null} },
-  set:(k,v)=>{ try{localStorage.setItem(k,JSON.stringify(v))}catch{} },
-  del:(k)=>{ try{localStorage.removeItem(k)}catch{} },
+const LS={
+  get:(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
+  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
+  del:(k)=>{try{localStorage.removeItem(k)}catch{}},
 };
+
+// ── Merge helpers ─────────────────────────────────────────
+function mergeLogs(local, remote) {
+  const merged = {...remote};
+  Object.keys(local).forEach(date => {
+    if (!merged[date]) {
+      merged[date] = local[date];
+    } else {
+      const remoteIds = new Set(merged[date].map(t => t.id));
+      const newEntries = local[date].filter(t => !remoteIds.has(t.id));
+      merged[date] = [...merged[date], ...newEntries];
+    }
+  });
+  return merged;
+}
+
+function mergePool(local, remote) {
+  const remoteProjectIds = new Set((remote.projects||[]).map(p => p.id));
+  const newProjects = (local.projects||[]).filter(p => !remoteProjectIds.has(p.id));
+  const remoteItemIds = new Set((remote.items||[]).map(i => i.id));
+  const newItems = (local.items||[]).filter(i => !remoteItemIds.has(i.id));
+  return {
+    projects: [...(remote.projects||[]), ...newProjects],
+    items: [...(remote.items||[]), ...newItems],
+  };
+}
+
+function mergeKnowledge(local, remote) {
+  const remoteThemeIds = new Set((remote.themes||[]).map(t => t.id));
+  const newThemes = (local.themes||[]).filter(t => !remoteThemeIds.has(t.id));
+  const mergedThemes = (remote.themes||[]).map(rt => {
+    const lt = (local.themes||[]).find(t => t.id === rt.id);
+    if (!lt) return rt;
+    const remoteEntryIds = new Set(rt.entries.map(e => e.id));
+    const newEntries = lt.entries.filter(e => !remoteEntryIds.has(e.id));
+    return {...rt, entries: [...rt.entries, ...newEntries]};
+  });
+  return {themes: [...mergedThemes, ...newThemes]};
+}
 
 // ── Crypto ────────────────────────────────────────────────
 async function deriveKey(pwd){
@@ -64,7 +100,7 @@ async function decryptStr(b64,pwd){
 }
 
 // ── GitHub Gist ───────────────────────────────────────────
-const GH = {
+const GH={
   async create(token,content){
     const r=await fetch("https://api.github.com/gists",{
       method:"POST",
@@ -93,7 +129,7 @@ const GH = {
 };
 
 // ── Styles ────────────────────────────────────────────────
-const S = {
+const S={
   app:{maxWidth:520,margin:"0 auto",padding:"16px 12px",minHeight:"100vh",background:"#f5f6fa"},
   card:{background:"#fff",borderRadius:12,padding:16,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"},
   input:{width:"100%",padding:"10px 12px",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,color:"#1a1d27",fontSize:14,outline:"none"},
@@ -106,110 +142,149 @@ const S = {
   badge:(bg)=>({display:"inline-block",padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:600,background:bg,color:"#fff",marginRight:4}),
   tabs:{display:"flex",background:"#e5e7eb",borderRadius:10,padding:3,marginBottom:20},
   tab:(a)=>({flex:1,padding:"9px 0",textAlign:"center",fontSize:11,fontWeight:600,border:"none",borderRadius:8,cursor:"pointer",background:a?"#2563eb":"transparent",color:a?"#fff":"#6b7280"}),
-  insight:{padding:"10px 14px",background:"#fffbeb",borderLeft:"3px solid #d97706",borderRadius:"0 8px 8px 0",marginBottom:8,fontSize:13,color:"#78350f"},
   modal:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16},
   modalBox:{background:"#fff",borderRadius:16,padding:20,width:"100%",maxWidth:480,maxHeight:"80vh",overflowY:"auto"},
 };
 
-// ── Main App ──────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────
 function App(){
-  const [tab,setTab]   = useState("log");
-  const [data,setData] = useState({logs:{},pool:{projects:[],items:[]},knowledge:{themes:[]}});
-  const [loading,setLoading] = useState(true);
+  const [tab,setTab]=useState("log");
+  const [data,setData]=useState({logs:{},pool:{projects:[],items:[]},knowledge:{themes:[]}});
+  const [loading,setLoading]=useState(true);
+  const [ghToken,setGhToken]=useState("");
+  const [ghGistId,setGhGistId]=useState("");
+  const [encPwd,setEncPwd]=useState("");
+  const [syncStatus,setSyncStatus]=useState("unconfigured");
+  const [syncMsg,setSyncMsg]=useState("");
+  const [lastSynced,setLastSynced]=useState("");
+  const [connecting,setConnecting]=useState(false);
+  const isConfigured=!!(ghToken&&ghGistId&&encPwd);
 
-  // sync state
-  const [ghToken,setGhToken]   = useState("");
-  const [ghGistId,setGhGistId] = useState("");
-  const [encPwd,setEncPwd]     = useState("");
-  const [syncStatus,setSyncStatus] = useState("unconfigured");
-  const [syncMsg,setSyncMsg]   = useState("");
-  const [lastSynced,setLastSynced] = useState("");
-  const [connecting,setConnecting] = useState(false);
-  const isConfigured = !!(ghToken&&ghGistId&&encPwd);
-
-  // load
   useEffect(()=>{
     (async()=>{
-      const saved = LS.get("wt-data");
-      if(saved) setData(saved);
-      const token  = LS.get("gh-token")||"";
-      const gistId = LS.get("gh-gist-id")||"";
-      const pwd    = LS.get("enc-pwd")||"";
-      const ls_    = LS.get("last-synced")||"";
-      setGhToken(token); setGhGistId(gistId); setEncPwd(pwd); setLastSynced(ls_);
+      const saved=LS.get("wt-data");
+      const token=LS.get("gh-token")||"";
+      const gistId=LS.get("gh-gist-id")||"";
+      const pwd=LS.get("enc-pwd")||"";
+      const ls_=LS.get("last-synced")||"";
+      setGhToken(token);setGhGistId(gistId);setEncPwd(pwd);setLastSynced(ls_);
       if(token&&gistId&&pwd){
         setSyncStatus("syncing");
         try{
           const raw=await GH.fetch(token,gistId);
           if(raw){
             const plain=await decryptStr(raw,pwd);
-            setData(JSON.parse(plain));
+            const remote=JSON.parse(plain);
+            if(saved){
+              const merged={
+                logs:mergeLogs(saved.logs||{},remote.logs||{}),
+                pool:mergePool(saved.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+                knowledge:mergeKnowledge(saved.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+              };
+              setData(merged);
+              LS.set("wt-data",merged);
+              const enc=await encryptStr(JSON.stringify(merged),pwd);
+              await GH.update(token,gistId,enc);
+            } else {
+              setData(remote);
+              LS.set("wt-data",remote);
+            }
+          } else if(saved){
+            setData(saved);
           }
           const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-          setLastSynced(now); LS.set("last-synced",now);
+          setLastSynced(now);LS.set("last-synced",now);
           setSyncStatus("synced");
-        }catch{setSyncStatus("error");setSyncMsg("拉取失败，使用本地数据");}
+        }catch(e){
+          setSyncStatus("error");setSyncMsg("拉取失败，使用本地数据");
+          if(saved) setData(saved);
+        }
+      } else if(saved){
+        setData(saved);
       }
       setLoading(false);
     })();
   },[]);
 
-  const save = useCallback(async(newData)=>{
+  const save=useCallback(async(newData)=>{
     setData(newData);
     LS.set("wt-data",newData);
     if(ghToken&&ghGistId&&encPwd){
       setSyncStatus("syncing");
       try{
-        const enc=await encryptStr(JSON.stringify(newData),encPwd);
+        const raw=await GH.fetch(ghToken,ghGistId);
+        let toSave=newData;
+        if(raw){
+          const plain=await decryptStr(raw,encPwd);
+          const remote=JSON.parse(plain);
+          toSave={
+            logs:mergeLogs(newData.logs||{},remote.logs||{}),
+            pool:mergePool(newData.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+            knowledge:mergeKnowledge(newData.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+          };
+          setData(toSave);
+          LS.set("wt-data",toSave);
+        }
+        const enc=await encryptStr(JSON.stringify(toSave),encPwd);
         await GH.update(ghToken,ghGistId,enc);
         const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-        setLastSynced(now); LS.set("last-synced",now);
+        setLastSynced(now);LS.set("last-synced",now);
         setSyncStatus("synced");
       }catch{setSyncStatus("error");setSyncMsg("同步失败，已保存本地");}
     }
   },[ghToken,ghGistId,encPwd]);
 
-  const connectGist = async()=>{
+  const manualSync=async()=>{
+    if(!isConfigured) return;
+    setSyncStatus("syncing");setSyncMsg("");
+    try{
+      const raw=await GH.fetch(ghToken,ghGistId);
+      if(raw){
+        const plain=await decryptStr(raw,encPwd);
+        const remote=JSON.parse(plain);
+        const local=LS.get("wt-data")||data;
+        const merged={
+          logs:mergeLogs(local.logs||{},remote.logs||{}),
+          pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+          knowledge:mergeKnowledge(local.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+        };
+        setData(merged);LS.set("wt-data",merged);
+        const enc=await encryptStr(JSON.stringify(merged),encPwd);
+        await GH.update(ghToken,ghGistId,enc);
+      }
+      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
+      setLastSynced(now);LS.set("last-synced",now);
+      setSyncStatus("synced");setSyncMsg("同步完成");
+    }catch(e){setSyncStatus("error");setSyncMsg("同步失败："+e.message);}
+  };
+
+  const connectGist=async()=>{
     if(!ghToken.trim()||!encPwd.trim()){setSyncMsg("请填写 Token 和加密密码");return;}
     setConnecting(true);setSyncMsg("");
     try{
       const enc=await encryptStr(JSON.stringify(data),encPwd);
       const id=await GH.create(ghToken.trim(),enc);
       setGhGistId(id);
-      LS.set("gh-token",ghToken.trim()); LS.set("gh-gist-id",id); LS.set("enc-pwd",encPwd);
+      LS.set("gh-token",ghToken.trim());LS.set("gh-gist-id",id);LS.set("enc-pwd",encPwd);
       const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-      setLastSynced(now); LS.set("last-synced",now);
-      setSyncStatus("synced"); setSyncMsg("连接成功！数据已加密上传");
+      setLastSynced(now);LS.set("last-synced",now);
+      setSyncStatus("synced");setSyncMsg("连接成功！数据已加密上传");
     }catch(e){setSyncStatus("error");setSyncMsg("连接失败："+e.message);}
     setConnecting(false);
   };
 
-  const disconnectGist = ()=>{
-    setGhToken(""); setGhGistId(""); setEncPwd(""); setLastSynced("");
-    setSyncStatus("unconfigured"); setSyncMsg("");
-    LS.del("gh-token"); LS.del("gh-gist-id"); LS.del("enc-pwd"); LS.del("last-synced");
+  const disconnectGist=()=>{
+    setGhToken("");setGhGistId("");setEncPwd("");setLastSynced("");
+    setSyncStatus("unconfigured");setSyncMsg("");
+    LS.del("gh-token");LS.del("gh-gist-id");LS.del("enc-pwd");LS.del("last-synced");
   };
 
-  const manualSync = async()=>{
-    if(!isConfigured) return;
-    setSyncStatus("syncing"); setSyncMsg("");
-    try{
-      const raw=await GH.fetch(ghToken,ghGistId);
-      if(raw){ const plain=await decryptStr(raw,encPwd); const d=JSON.parse(plain); setData(d); LS.set("wt-data",d); }
-      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-      setLastSynced(now); LS.set("last-synced",now);
-      setSyncStatus("synced"); setSyncMsg("同步完成");
-    }catch(e){setSyncStatus("error");setSyncMsg("同步失败："+e.message);}
-  };
-
-  const syncColor = {unconfigured:"#9ca3af",syncing:"#d97706",synced:"#059669",error:"#dc2626"}[syncStatus];
-  const syncLabel = {unconfigured:"未同步",syncing:"同步中…",synced:"已同步",error:"同步失败"}[syncStatus];
+  const syncColor={unconfigured:"#9ca3af",syncing:"#d97706",synced:"#059669",error:"#dc2626"}[syncStatus];
+  const syncLabel={unconfigured:"未同步",syncing:"同步中…",synced:"已同步",error:"同步失败"}[syncStatus];
 
   if(loading) return <div style={{...S.app,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><p style={{color:"#9ca3af"}}>加载中…</p></div>;
 
-  const tabProps = {data,save};
-
-  return (
+  return(
     <div style={S.app}>
       <div style={{textAlign:"center",marginBottom:20}}>
         <div style={{fontSize:15,fontWeight:700,letterSpacing:1,color:"#111318"}}>WORK TRACKER</div>
@@ -222,68 +297,66 @@ function App(){
           </span>
         </div>
       </div>
-
       <div style={S.tabs}>
         <button style={S.tab(tab==="log")}       onClick={()=>setTab("log")}>每日记录</button>
         <button style={S.tab(tab==="pool")}      onClick={()=>setTab("pool")}>待办池</button>
         <button style={S.tab(tab==="knowledge")} onClick={()=>setTab("knowledge")}>知识库</button>
         <button style={S.tab(tab==="settings")}  onClick={()=>setTab("settings")}>设置</button>
       </div>
-
-      {tab==="log"       && <LogTab {...tabProps}/>}
-      {tab==="pool"      && <PoolTab {...tabProps}/>}
-      {tab==="knowledge" && <KnowledgeTab {...tabProps}/>}
+      {tab==="log"       && <LogTab data={data} save={save}/>}
+      {tab==="pool"      && <PoolTab data={data} save={save}/>}
+      {tab==="knowledge" && <KnowledgeTab data={data} save={save}/>}
       {tab==="settings"  && <SettingsTab data={data} save={save}
-        ghToken={ghToken} setGhToken={setGhToken}
-        ghGistId={ghGistId} encPwd={encPwd} setEncPwd={setEncPwd}
-        syncStatus={syncStatus} syncMsg={syncMsg} lastSynced={lastSynced}
-        isConfigured={isConfigured} connecting={connecting}
-        connectGist={connectGist} disconnectGist={disconnectGist} manualSync={manualSync}/>}
-
-      <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>
-        数据加密同步至 GitHub Gist
-      </div>
+        ghToken={ghToken} setGhToken={setGhToken} ghGistId={ghGistId}
+        encPwd={encPwd} setEncPwd={setEncPwd} syncStatus={syncStatus}
+        syncMsg={syncMsg} lastSynced={lastSynced} isConfigured={isConfigured}
+        connecting={connecting} connectGist={connectGist}
+        disconnectGist={disconnectGist} manualSync={manualSync}/>}
+      <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>数据加密同步至 GitHub Gist</div>
     </div>
   );
 }
 
 // ── Log Tab ───────────────────────────────────────────────
 function LogTab({data,save}){
-  const [selDate,setSelDate] = useState(today());
-  const [name,setName]   = useState("");
-  const [cat,setCat]     = useState("core");
-  const [mins,setMins]   = useState(30);
-  const [note,setNote]   = useState("");
-  const [showNote,setShowNote] = useState(false);
-  const [exportModal,setExportModal] = useState(false);
+  const [selDate,setSelDate]=useState(today());
+  const [name,setName]=useState("");
+  const [cat,setCat]=useState("core");
+  const [mins,setMins]=useState(30);
+  const [note,setNote]=useState("");
+  const [exportModal,setExportModal]=useState(false);
+  const [editEntry,setEditEntry]=useState(null);
 
-  const entries = data.logs[selDate]||[];
-  const totalMins = entries.reduce((s,t)=>s+t.mins,0);
+  const entries=data.logs[selDate]||[];
+  const totalMins=entries.reduce((s,t)=>s+t.mins,0);
+  const shiftDate=d=>{const dt=new Date(selDate);dt.setDate(dt.getDate()+d);setSelDate(dt.toISOString().slice(0,10));};
 
-  const shiftDate = d=>{ const dt=new Date(selDate); dt.setDate(dt.getDate()+d); setSelDate(dt.toISOString().slice(0,10)); };
-
-  const addTask = ()=>{
+  const addTask=()=>{
     if(!name.trim()) return;
     const entry={id:Date.now(),name:name.trim(),cat,mins,note:note.trim(),createdAt:selDate};
-    const newLogs={...data.logs,[selDate]:[...entries,entry]};
-    save({...data,logs:newLogs});
-    setName(""); setNote(""); setShowNote(false); setMins(30);
+    save({...data,logs:{...data.logs,[selDate]:[...entries,entry]}});
+    setName("");setNote("");setMins(30);
   };
 
-  const removeTask = id=>{
+  const removeTask=id=>{
     const nl=(data.logs[selDate]||[]).filter(t=>t.id!==id);
     const newLogs={...data.logs};
     if(!nl.length) delete newLogs[selDate]; else newLogs[selDate]=nl;
     save({...data,logs:newLogs});
   };
 
+  const saveEdit=()=>{
+    if(!editEntry) return;
+    const newLogs={...data.logs,[selDate]:(data.logs[selDate]||[]).map(t=>t.id===editEntry.id?editEntry:t)};
+    save({...data,logs:newLogs});
+    setEditEntry(null);
+  };
+
   return(
     <>
       <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginBottom:16}}>
         <button style={{...S.btnSm(),padding:"6px 14px"}} onClick={()=>shiftDate(-1)}>◀</button>
-        <span style={{fontSize:15,fontWeight:600,minWidth:90,textAlign:"center"}}>
-          {selDate===today()?"今天":selDate}
-        </span>
+        <span style={{fontSize:15,fontWeight:600,minWidth:90,textAlign:"center"}}>{selDate===today()?"今天":selDate}</span>
         <button style={{...S.btnSm(),padding:"6px 14px"}} onClick={()=>shiftDate(1)}>▶</button>
         {selDate!==today()&&<button style={S.btnSm("#2563eb")} onClick={()=>setSelDate(today())}>今天</button>}
       </div>
@@ -301,12 +374,8 @@ function LogTab({data,save}){
           </select>
         </div>
         <div style={{fontSize:11,color:"#9ca3af",marginBottom:8}}>{CATS.find(c=>c.key===cat)?.desc}</div>
-        <button style={{...S.btnSm("#f0f9ff","#2563eb"),marginBottom:8,border:"1px solid #bfdbfe"}}
-          onClick={()=>setShowNote(v=>!v)}>
-          {showNote?"收起备注":"+ 添加备注"}
-        </button>
-        {showNote&&<textarea style={{...S.textarea,marginBottom:8}} placeholder="记录判断、遇到的问题、或任何想法…"
-          value={note} onChange={e=>setNote(e.target.value)}/>}
+        <textarea style={{...S.textarea,marginBottom:8}} placeholder="备注：判断、遇到的问题、或任何想法…"
+          value={note} onChange={e=>setNote(e.target.value)}/>
         <button style={S.btn()} onClick={addTask}>添加</button>
       </div>
 
@@ -317,29 +386,60 @@ function LogTab({data,save}){
             <span style={{fontSize:12,color:"#9ca3af"}}>{Math.floor(totalMins/60)}h{totalMins%60>0?`${totalMins%60}m`:""}</span>
           </div>
           <div style={{display:"flex",height:8,borderRadius:4,overflow:"hidden",marginBottom:12}}>
-            {CATS.map(c=>{ const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
-              return <div key={c.key} style={{background:c.color,width:`${(m/totalMins)*100}%`,minWidth:m>0?2:0,transition:"width .3s"}}/> })}
+            {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
+              return <div key={c.key} style={{background:c.color,width:`${(m/totalMins)*100}%`,minWidth:m>0?2:0,transition:"width .3s"}}/>;
+            })}
           </div>
           <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap"}}>
-            {CATS.map(c=>{ const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
+            {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
               if(!m) return null;
-              return <span key={c.key} style={{fontSize:11,color:c.color}}>● {c.label} {Math.round((m/totalMins)*100)}%</span>; })}
+              return <span key={c.key} style={{fontSize:11,color:c.color}}>● {c.label} {Math.round((m/totalMins)*100)}%</span>;
+            })}
           </div>
+
           {entries.map(t=>{
-            const cat=CATS.find(c=>c.key===t.cat);
+            const catInfo=CATS.find(c=>c.key===t.cat);
+            const isEditing=editEntry?.id===t.id;
             return(
               <div key={t.id} style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div style={{display:"flex",alignItems:"center",flex:1,minWidth:0,gap:8}}>
-                    <span style={{width:8,height:8,borderRadius:"50%",background:cat?.color,flexShrink:0}}/>
-                    <span style={{fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</span>
+                {isEditing?(
+                  <div>
+                    <input style={{...S.input,marginBottom:8}} value={editEntry.name}
+                      onChange={e=>setEditEntry({...editEntry,name:e.target.value})}/>
+                    <div style={{...S.row,marginBottom:8}}>
+                      <select style={{...S.select,flex:2}} value={editEntry.cat}
+                        onChange={e=>setEditEntry({...editEntry,cat:e.target.value})}>
+                        {CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                      </select>
+                      <select style={{...S.select,flex:"0 0 88px"}} value={editEntry.mins}
+                        onChange={e=>setEditEntry({...editEntry,mins:Number(e.target.value)})}>
+                        {[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{m>=60?`${m/60}h`:`${m}m`}</option>)}
+                      </select>
+                    </div>
+                    <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.note||""}
+                      onChange={e=>setEditEntry({...editEntry,note:e.target.value})}
+                      placeholder="备注"/>
+                    <div style={{display:"flex",gap:6}}>
+                      <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEdit}>保存</button>
+                      <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditEntry(null)}>取消</button>
+                    </div>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                    <span style={{fontSize:11,color:"#9ca3af"}}>{fmtMins(t.mins)}</span>
-                    <button style={S.btnSm("#dc2626")} onClick={()=>removeTask(t.id)}>删</button>
+                ):(
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                      <div style={{display:"flex",alignItems:"center",flex:1,minWidth:0,gap:8}}>
+                        <span style={{width:8,height:8,borderRadius:"50%",background:catInfo?.color,flexShrink:0}}/>
+                        <span style={{fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</span>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                        <span style={{fontSize:11,color:"#9ca3af"}}>{fmtMins(t.mins)}</span>
+                        <button style={S.btnSm("#f59e0b")} onClick={()=>setEditEntry({...t})}>✎</button>
+                        <button style={S.btnSm("#dc2626")} onClick={()=>removeTask(t.id)}>删</button>
+                      </div>
+                    </div>
+                    {t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,paddingLeft:16,borderLeft:"2px solid #e5e7eb"}}>{t.note}</div>}
                   </div>
-                </div>
-                {t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,paddingLeft:16,borderLeft:"2px solid #e5e7eb"}}>{t.note}</div>}
+                )}
               </div>
             );
           })}
@@ -347,7 +447,6 @@ function LogTab({data,save}){
             onClick={()=>setExportModal(true)}>↓ 导出数据</button>
         </div>
       )}
-
       {exportModal&&<ExportModal data={data} defaultDate={selDate} onClose={()=>setExportModal(false)}/>}
     </>
   );
@@ -355,14 +454,14 @@ function LogTab({data,save}){
 
 // ── Export Modal ──────────────────────────────────────────
 function ExportModal({data,defaultDate,onClose}){
-  const [mode,setMode]     = useState("today");
-  const [from,setFrom]     = useState(defaultDate);
-  const [to,setTo]         = useState(today());
-  const [type,setType]     = useState("plain");
-  const [encPwd,setEncPwd] = useState("");
-  const [msg,setMsg]       = useState("");
+  const [mode,setMode]=useState("today");
+  const [from,setFrom]=useState(defaultDate);
+  const [to,setTo]=useState(today());
+  const [type,setType]=useState("plain");
+  const [encPwd,setEncPwd]=useState("");
+  const [msg,setMsg]=useState("");
 
-  const doExport = async()=>{
+  const doExport=async()=>{
     let logsToExport={};
     if(mode==="today"){
       logsToExport={[defaultDate]:data.logs[defaultDate]||[]};
@@ -378,7 +477,7 @@ function ExportModal({data,defaultDate,onClose}){
       filename=filename.replace(".json",".enc.json");
     }
     const blob=new Blob([content],{type:"application/json"});
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;a.click();
     onClose();
   };
 
@@ -386,11 +485,10 @@ function ExportModal({data,defaultDate,onClose}){
     <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div style={S.modalBox}>
         <div style={{fontWeight:600,fontSize:15,marginBottom:16}}>导出数据</div>
-
         <label style={S.label}>导出范围</label>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
-          <button style={S.btn(mode==="today"?"#2563eb":"#f9fafb",mode==="today"?"#fff":"#374151")} onClick={()=>setMode("today")}>今天</button>
-          <button style={S.btn(mode==="range"?"#2563eb":"#f9fafb",mode==="range"?"#fff":"#374151")} onClick={()=>setMode("range")}>指定范围</button>
+          <button style={{...S.btn(mode==="today"?"#2563eb":"#f9fafb",mode==="today"?"#fff":"#374151"),flex:1}} onClick={()=>setMode("today")}>今天</button>
+          <button style={{...S.btn(mode==="range"?"#2563eb":"#f9fafb",mode==="range"?"#fff":"#374151"),flex:1}} onClick={()=>setMode("range")}>指定范围</button>
         </div>
         {mode==="range"&&(
           <div style={{...S.row,marginBottom:12}}>
@@ -398,11 +496,10 @@ function ExportModal({data,defaultDate,onClose}){
             <div style={{flex:1}}><label style={S.label}>到</label><input type="date" style={S.input} value={to} onChange={e=>setTo(e.target.value)}/></div>
           </div>
         )}
-
         <label style={S.label}>导出类型</label>
         <div style={{display:"flex",gap:8,marginBottom:4}}>
-          <button style={S.btn(type==="plain"?"#2563eb":"#f9fafb",type==="plain"?"#fff":"#374151")} onClick={()=>setType("plain")}>明文（发给AI分析）</button>
-          <button style={S.btn(type==="encrypted"?"#2563eb":"#f9fafb",type==="encrypted"?"#fff":"#374151")} onClick={()=>setType("encrypted")}>加密（本地备份）</button>
+          <button style={{...S.btn(type==="plain"?"#2563eb":"#f9fafb",type==="plain"?"#fff":"#374151"),flex:1}} onClick={()=>setType("plain")}>明文（发给AI分析）</button>
+          <button style={{...S.btn(type==="encrypted"?"#2563eb":"#f9fafb",type==="encrypted"?"#fff":"#374151"),flex:1}} onClick={()=>setType("encrypted")}>加密（本地备份）</button>
         </div>
         {type==="plain"&&<div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>明文文件可上传给 Claude 进行分析提炼</div>}
         {type==="encrypted"&&(
@@ -413,8 +510,8 @@ function ExportModal({data,defaultDate,onClose}){
         )}
         {msg&&<div style={{fontSize:12,color:"#dc2626",marginBottom:8}}>{msg}</div>}
         <div style={{display:"flex",gap:8}}>
-          <button style={S.btn()} onClick={doExport}>导出</button>
-          <button style={S.btn("#f9fafb","#374151")} onClick={onClose}>取消</button>
+          <button style={{...S.btn(),flex:1}} onClick={doExport}>导出</button>
+          <button style={{...S.btn("#f9fafb","#374151"),flex:1}} onClick={onClose}>取消</button>
         </div>
       </div>
     </div>
@@ -423,72 +520,79 @@ function ExportModal({data,defaultDate,onClose}){
 
 // ── Pool Tab ──────────────────────────────────────────────
 function PoolTab({data,save}){
-  const [view,setView]       = useState("flat");
-  const [showAddProj,setShowAddProj] = useState(false);
-  const [showAddItem,setShowAddItem] = useState(false);
-  const [projName,setProjName]       = useState("");
-  const [itemName,setItemName]       = useState("");
-  const [itemProj,setItemProj]       = useState("");
-  const [itemValue,setItemValue]     = useState(1);
-  const [itemUrgency,setItemUrgency] = useState(1);
-  const [itemDeadline,setItemDeadline] = useState("");
-  const [editItem,setEditItem]       = useState(null);
-  const [editProj,setEditProj]       = useState(null);
+  const [view,setView]=useState("flat");
+  const [itemName,setItemName]=useState("");
+  const [itemProj,setItemProj]=useState("");
+  const [itemValue,setItemValue]=useState(1);
+  const [itemUrgency,setItemUrgency]=useState(1);
+  const [itemDeadline,setItemDeadline]=useState("");
+  const [newProjName,setNewProjName]=useState("");
+  const [showNewProj,setShowNewProj]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+  const [editProjId,setEditProjId]=useState(null);
+  const [editProjName,setEditProjName]=useState("");
 
-  const projects = data.pool?.projects||[];
-  const items    = data.pool?.items||[];
-  const activeItems  = items.filter(i=>!i.done);
-  const doneItems    = items.filter(i=>i.done);
+  const projects=data.pool?.projects||[];
+  const items=data.pool?.items||[];
+  const activeItems=items.filter(i=>!i.done);
+  const doneItems=items.filter(i=>i.done);
+  const savePool=p=>save({...data,pool:p});
 
-  const savePool = p => save({...data,pool:p});
-
-  const addProject = ()=>{
-    if(!projName.trim()) return;
-    const p={id:Date.now(),name:projName.trim(),status:"active"};
-    savePool({...data.pool,projects:[...projects,p]});
-    setProjName(""); setShowAddProj(false);
+  const addProjectInline=()=>{
+    if(!newProjName.trim()) return;
+    const p={id:Date.now(),name:newProjName.trim(),status:"active"};
+    const newProjects=[...projects,p];
+    savePool({...data.pool,projects:newProjects});
+    setItemProj(String(p.id));
+    setNewProjName("");setShowNewProj(false);
+    return p.id;
   };
 
-  const addItem = ()=>{
+  const addItem=()=>{
     if(!itemName.trim()) return;
     const it={id:Date.now(),name:itemName.trim(),projectId:itemProj||null,
       value:itemValue,urgency:itemUrgency,deadline:itemDeadline||null,
       blocked:false,done:false,created:today()};
     savePool({...data.pool,items:[...items,it]});
-    setItemName(""); setItemProj(""); setItemValue(1); setItemUrgency(1); setItemDeadline(""); setShowAddItem(false);
+    setItemName("");setItemProj("");setItemValue(1);setItemUrgency(1);setItemDeadline("");
   };
 
-  const toggleDone = id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,done:!i.done}:i)});
-  const toggleBlocked = id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,blocked:!i.blocked}:i)});
-  const removeItem = id=>savePool({...data.pool,items:items.filter(i=>i.id!==id)});
-  const removeProject = id=>{
-    savePool({projects:projects.filter(p=>p.id!==id),items:items.map(i=>i.projectId===id?{...i,projectId:null}:i)});
-  };
-  const toggleProjStatus = id=>{
-    savePool({...data.pool,projects:projects.map(p=>p.id===id?{...p,status:p.status==="active"?"blocked":"active"}:p)});
-  };
-  const saveItemEdit = ()=>{
+  const toggleDone=id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,done:!i.done}:i)});
+  const toggleBlocked=id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,blocked:!i.blocked}:i)});
+  const removeItem=id=>savePool({...data.pool,items:items.filter(i=>i.id!==id)});
+  const removeProject=id=>savePool({projects:projects.filter(p=>p.id!==id),items:items.map(i=>i.projectId===id?{...i,projectId:null}:i)});
+  const toggleProjStatus=id=>savePool({...data.pool,projects:projects.map(p=>p.id===id?{...p,status:p.status==="active"?"blocked":"active"}:p)});
+  const saveItemEdit=()=>{
     if(!editItem) return;
     savePool({...data.pool,items:items.map(i=>i.id===editItem.id?editItem:i)});
     setEditItem(null);
   };
+  const saveProjEdit=()=>{
+    if(!editProjName.trim()) return;
+    savePool({...data.pool,projects:projects.map(p=>p.id===editProjId?{...p,name:editProjName.trim()}:p)});
+    setEditProjId(null);setEditProjName("");
+  };
 
-  const sortedItems = [...activeItems].sort((a,b)=>(b.value*3+b.urgency)-(a.value*3+a.urgency));
+  const sortedItems=[...activeItems].sort((a,b)=>(b.value*3+b.urgency)-(a.value*3+a.urgency));
 
-  const ItemCard = ({item,dimmed})=>{
-    const proj=projects.find(p=>p.id===item.projectId);
+  const ItemCard=({item,dimmed})=>{
+    const proj=projects.find(p=>p.id==item.projectId);
     const days=item.deadline?Math.ceil((new Date(item.deadline)-new Date())/86400000):null;
     return(
       <div style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6,opacity:dimmed?0.45:1}}>
         {editItem?.id===item.id?(
           <div>
-            <input style={{...S.input,marginBottom:8}} value={editItem.name} onChange={e=>setEditItem({...editItem,name:e.target.value})}/>
+            <input style={{...S.input,marginBottom:8}} value={editItem.name}
+              onChange={e=>setEditItem({...editItem,name:e.target.value})}
+              onKeyDown={e=>e.key==="Enter"&&saveItemEdit()}/>
             <div style={{...S.row,marginBottom:8}}>
-              <select style={{...S.select,flex:2}} value={editItem.projectId||""} onChange={e=>setEditItem({...editItem,projectId:e.target.value||null})}>
+              <select style={{...S.select,flex:2}} value={editItem.projectId||""}
+                onChange={e=>setEditItem({...editItem,projectId:e.target.value||null})}>
                 <option value="">无归属项目</option>
                 {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-              <input type="date" style={{...S.select,flex:"0 0 140px"}} value={editItem.deadline||""} onChange={e=>setEditItem({...editItem,deadline:e.target.value||null})}/>
+              <input type="date" style={{...S.select,flex:"0 0 140px"}} value={editItem.deadline||""}
+                onChange={e=>setEditItem({...editItem,deadline:e.target.value||null})}/>
             </div>
             <div style={{...S.row,marginBottom:8}}>
               <div style={{flex:1}}>
@@ -545,98 +649,105 @@ function PoolTab({data,save}){
 
   return(
     <>
-      {/* Add Project */}
+      {/* Projects */}
       <div style={S.card}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showAddProj?12:0}}>
-          <label style={{...S.label,marginBottom:0}}>项目 ({projects.length})</label>
-          <button style={S.btnSm("#2563eb")} onClick={()=>setShowAddProj(v=>!v)}>{showAddProj?"取消":"+ 新建项目"}</button>
-        </div>
-        {showAddProj&&(
-          <div style={{marginTop:10}}>
-            <input style={{...S.input,marginBottom:8}} placeholder="项目名称" value={projName}
-              onChange={e=>setProjName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProject()}/>
-            <button style={S.btn()} onClick={addProject}>添加项目</button>
-          </div>
-        )}
-        {projects.length>0&&(
-          <div style={{marginTop:12}}>
-            {projects.map(p=>(
-              <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",background:p.status==="blocked"?"#fafafa":"#f0f9ff",borderRadius:8,marginBottom:6,opacity:p.status==="blocked"?0.6:1}}>
+        <label style={S.label}>项目 ({projects.length})</label>
+        {projects.map(p=>(
+          <div key={p.id} style={{marginBottom:6}}>
+            {editProjId===p.id?(
+              <div style={{display:"flex",gap:6}}>
+                <input style={{...S.input,flex:1}} value={editProjName}
+                  onChange={e=>setEditProjName(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&saveProjEdit()}/>
+                <button style={{...S.btnSm("#059669"),padding:"8px 12px"}} onClick={saveProjEdit}>✓</button>
+                <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>setEditProjId(null)}>✕</button>
+              </div>
+            ):(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",
+                background:p.status==="blocked"?"#fafafa":"#f0f9ff",borderRadius:8,opacity:p.status==="blocked"?0.6:1}}>
                 <span style={{fontSize:13,color:p.status==="blocked"?"#9ca3af":"#1a1d27"}}>{p.name}</span>
                 <div style={{display:"flex",gap:4}}>
+                  <button style={S.btnSm("#f59e0b")} onClick={()=>{setEditProjId(p.id);setEditProjName(p.name);}}>✎</button>
                   <button style={S.btnSm(p.status==="blocked"?"#059669":"#e5e7eb",p.status==="blocked"?"#fff":"#374151")}
                     onClick={()=>toggleProjStatus(p.id)}>{p.status==="blocked"?"激活":"搁置"}</button>
                   <button style={S.btnSm("#dc2626")} onClick={()=>removeProject(p.id)}>删</button>
                 </div>
               </div>
-            ))}
+            )}
           </div>
-        )}
+        ))}
       </div>
 
       {/* Add Item */}
       <div style={S.card}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showAddItem?12:0}}>
-          <label style={{...S.label,marginBottom:0}}>事项 ({activeItems.length})</label>
-          <div style={{display:"flex",gap:6}}>
-            <button style={S.btnSm(view==="flat"?"#2563eb":undefined)} onClick={()=>setView("flat")}>平铺</button>
-            <button style={S.btnSm(view==="group"?"#2563eb":undefined)} onClick={()=>setView("group")}>按项目</button>
-            <button style={S.btnSm("#059669")} onClick={()=>setShowAddItem(v=>!v)}>{showAddItem?"取消":"+ 新增"}</button>
-          </div>
+        <label style={S.label}>新增事项</label>
+        <input style={{...S.input,marginBottom:8}} placeholder="待办事项（回车快速添加）" value={itemName}
+          onChange={e=>setItemName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
+        <div style={{...S.row,marginBottom:8}}>
+          <select style={{...S.select,flex:2}} value={itemProj} onChange={e=>{
+            if(e.target.value==="__new__"){setShowNewProj(true);}
+            else setItemProj(e.target.value);
+          }}>
+            <option value="">无归属项目</option>
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            <option value="__new__">＋ 新建项目…</option>
+          </select>
+          <input type="date" style={{...S.select,flex:"0 0 140px"}} value={itemDeadline}
+            onChange={e=>setItemDeadline(e.target.value)}/>
         </div>
-
-        {showAddItem&&(
-          <div style={{marginTop:10}}>
-            <input style={{...S.input,marginBottom:8}} placeholder="待办事项" value={itemName}
-              onChange={e=>setItemName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
-            <div style={{...S.row,marginBottom:8}}>
-              <select style={{...S.select,flex:2}} value={itemProj} onChange={e=>setItemProj(e.target.value)}>
-                <option value="">无归属项目</option>
-                {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input type="date" style={{...S.select,flex:"0 0 140px"}} value={itemDeadline} onChange={e=>setItemDeadline(e.target.value)}/>
-            </div>
-            <div style={{...S.row,marginBottom:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>价值</div>
-                <div style={{display:"flex",gap:4}}>
-                  {VALUE.map((v,i)=><button key={i} style={{...S.btnSm(itemValue===i?"#2563eb":undefined),flex:1}} onClick={()=>setItemValue(i)}>{v}</button>)}
-                </div>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>紧急</div>
-                <div style={{display:"flex",gap:4}}>
-                  {URGENCY.map((u,i)=><button key={i} style={{...S.btnSm(itemUrgency===i?"#d97706":undefined),flex:1}} onClick={()=>setItemUrgency(i)}>{u}</button>)}
-                </div>
-              </div>
-            </div>
-            <button style={S.btn()} onClick={addItem}>加入待办池</button>
+        {showNewProj&&(
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <input style={{...S.input,flex:1}} placeholder="新项目名称" value={newProjName}
+              onChange={e=>setNewProjName(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&addProjectInline()}/>
+            <button style={{...S.btnSm("#059669"),padding:"8px 12px"}} onClick={addProjectInline}>✓</button>
+            <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>{setShowNewProj(false);setNewProjName("");}}>✕</button>
           </div>
         )}
+        <div style={{...S.row,marginBottom:10}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>价值</div>
+            <div style={{display:"flex",gap:4}}>
+              {VALUE.map((v,i)=><button key={i} style={{...S.btnSm(itemValue===i?"#2563eb":undefined),flex:1}} onClick={()=>setItemValue(i)}>{v}</button>)}
+            </div>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>紧急</div>
+            <div style={{display:"flex",gap:4}}>
+              {URGENCY.map((u,i)=><button key={i} style={{...S.btnSm(itemUrgency===i?"#d97706":undefined),flex:1}} onClick={()=>setItemUrgency(i)}>{u}</button>)}
+            </div>
+          </div>
+        </div>
+        <button style={S.btn()} onClick={addItem}>加入待办池</button>
       </div>
 
       {/* Item List */}
-      {view==="flat"&&(
-        <div style={S.card}>
-          {sortedItems.length===0&&<div style={{textAlign:"center",color:"#9ca3af",padding:24}}>暂无待办事项</div>}
-          {sortedItems.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)}
+      <div style={S.card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <label style={{...S.label,marginBottom:0}}>待办 ({activeItems.length})</label>
+          <div style={{display:"flex",gap:6}}>
+            <button style={S.btnSm(view==="flat"?"#2563eb":undefined)} onClick={()=>setView("flat")}>平铺</button>
+            <button style={S.btnSm(view==="group"?"#2563eb":undefined)} onClick={()=>setView("group")}>按项目</button>
+          </div>
         </div>
-      )}
-
-      {view==="group"&&(
-        <>
-          {[...projects,{id:null,name:"未归属事项"}].map(proj=>{
+        {view==="flat"&&(
+          sortedItems.length===0
+            ?<div style={{textAlign:"center",color:"#9ca3af",padding:24}}>暂无待办事项</div>
+            :sortedItems.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)
+        )}
+        {view==="group"&&(
+          [...projects,{id:null,name:"未归属事项"}].map(proj=>{
             const its=sortedItems.filter(i=>(proj.id===null?!i.projectId:i.projectId==proj.id));
             if(!its.length) return null;
             return(
-              <div key={proj.id||"none"} style={S.card}>
-                <label style={S.label}>{proj.name} ({its.length})</label>
+              <div key={proj.id||"none"} style={{marginBottom:12}}>
+                <div style={{fontSize:12,fontWeight:600,color:"#6b7280",marginBottom:6}}>{proj.name}</div>
                 {its.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)}
               </div>
             );
-          })}
-        </>
-      )}
+          })
+        )}
+      </div>
 
       {doneItems.length>0&&(
         <div style={S.card}>
@@ -650,66 +761,50 @@ function PoolTab({data,save}){
 
 // ── Knowledge Tab ─────────────────────────────────────────
 function KnowledgeTab({data,save}){
-  const [search,setSearch]       = useState("");
-  const [showAddTheme,setShowAddTheme] = useState(false);
-  const [themeName,setThemeName] = useState("");
-  const [activeTheme,setActiveTheme] = useState(null);
-  const [showAddEntry,setShowAddEntry] = useState(false);
-  const [entryContent,setEntryContent] = useState("");
-  const [entryLogRef,setEntryLogRef]   = useState({date:"",taskId:""});
-  const [refModal,setRefModal]         = useState(null);
+  const [search,setSearch]=useState("");
+  const [showAddTheme,setShowAddTheme]=useState(false);
+  const [themeName,setThemeName]=useState("");
+  const [activeTheme,setActiveTheme]=useState(null);
+  const [showAddEntry,setShowAddEntry]=useState(false);
+  const [entryContent,setEntryContent]=useState("");
+  const [entryLogRef,setEntryLogRef]=useState({date:"",taskId:""});
+  const [refModal,setRefModal]=useState(null);
 
-  const themes  = data.knowledge?.themes||[];
-  const saveKnow = k=>save({...data,knowledge:k});
-
-  const addTheme = ()=>{
+  const themes=data.knowledge?.themes||[];
+  const saveKnow=k=>save({...data,knowledge:k});
+  const addTheme=()=>{
     if(!themeName.trim()) return;
-    const t={id:Date.now(),name:themeName.trim(),entries:[]};
-    saveKnow({...data.knowledge,themes:[...themes,t]});
-    setThemeName(""); setShowAddTheme(false);
+    saveKnow({...data.knowledge,themes:[...themes,{id:Date.now(),name:themeName.trim(),entries:[]}]});
+    setThemeName("");setShowAddTheme(false);
   };
-
-  const removeTheme = id=>saveKnow({...data.knowledge,themes:themes.filter(t=>t.id!==id)});
-
-  const addEntry = ()=>{
+  const removeTheme=id=>saveKnow({...data.knowledge,themes:themes.filter(t=>t.id!==id)});
+  const addEntry=()=>{
     if(!entryContent.trim()||!activeTheme) return;
     const entry={id:Date.now(),content:entryContent.trim(),
-      logRef:entryLogRef.date&&entryLogRef.taskId?entryLogRef:null,
-      createdAt:today()};
+      logRef:entryLogRef.date&&entryLogRef.taskId?entryLogRef:null,createdAt:today()};
     saveKnow({...data.knowledge,themes:themes.map(t=>t.id===activeTheme?{...t,entries:[...t.entries,entry]}:t)});
-    setEntryContent(""); setEntryLogRef({date:"",taskId:""}); setShowAddEntry(false);
+    setEntryContent("");setEntryLogRef({date:"",taskId:""});setShowAddEntry(false);
   };
-
-  const removeEntry = (themeId,entryId)=>{
+  const removeEntry=(themeId,entryId)=>{
     saveKnow({...data.knowledge,themes:themes.map(t=>t.id===themeId?{...t,entries:t.entries.filter(e=>e.id!==entryId)}:t)});
   };
-
-  const filteredThemes = themes.filter(t=>
-    !search || t.name.includes(search) || t.entries.some(e=>e.content.includes(search))
-  );
-
-  // find log task by ref
-  const findTask = (ref)=>{
+  const findTask=ref=>{
     if(!ref) return null;
-    const dayLogs=data.logs[ref.date]||[];
-    return dayLogs.find(t=>t.id===Number(ref.taskId))||null;
+    return (data.logs[ref.date]||[]).find(t=>t.id===Number(ref.taskId))||null;
   };
-
-  // available log dates for dropdown
-  const logDates = Object.keys(data.logs).sort().reverse();
-  const tasksForDate = entryLogRef.date ? (data.logs[entryLogRef.date]||[]) : [];
+  const logDates=Object.keys(data.logs).sort().reverse();
+  const tasksForDate=entryLogRef.date?(data.logs[entryLogRef.date]||[]):[];
+  const filteredThemes=themes.filter(t=>!search||t.name.includes(search)||t.entries.some(e=>e.content.includes(search)));
 
   return(
     <>
       <div style={S.card}>
         <input style={S.input} placeholder="搜索知识库…" value={search} onChange={e=>setSearch(e.target.value)}/>
       </div>
-
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <span style={{fontSize:13,color:"#6b7280"}}>{themes.length} 个主题</span>
         <button style={S.btnSm("#2563eb")} onClick={()=>setShowAddTheme(v=>!v)}>{showAddTheme?"取消":"+ 新建主题"}</button>
       </div>
-
       {showAddTheme&&(
         <div style={S.card}>
           <input style={{...S.input,marginBottom:8}} placeholder="主题名称，例如：财务流程设计" value={themeName}
@@ -717,14 +812,12 @@ function KnowledgeTab({data,save}){
           <button style={S.btn()} onClick={addTheme}>创建主题</button>
         </div>
       )}
-
       {filteredThemes.length===0&&(
         <div style={{textAlign:"center",color:"#9ca3af",padding:40}}>
           <div style={{fontSize:32,marginBottom:8}}>📚</div>
           <p style={{fontSize:13}}>{search?"没有找到相关内容":"每次导出数据与 Claude 分析后，将提炼结果粘贴进来"}</p>
         </div>
       )}
-
       {filteredThemes.map(theme=>(
         <div key={theme.id} style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -737,7 +830,6 @@ function KnowledgeTab({data,save}){
               <button style={S.btnSm("#dc2626")} onClick={()=>removeTheme(theme.id)}>删除</button>
             </div>
           </div>
-
           {activeTheme===theme.id&&showAddEntry&&(
             <div style={{background:"#f0f9ff",borderRadius:8,padding:12,marginBottom:12,border:"1px solid #bfdbfe"}}>
               <label style={S.label}>经验内容</label>
@@ -745,11 +837,13 @@ function KnowledgeTab({data,save}){
                 value={entryContent} onChange={e=>setEntryContent(e.target.value)}/>
               <label style={S.label}>关联每日记录（可选）</label>
               <div style={{...S.row,marginBottom:8}}>
-                <select style={{...S.select,flex:1}} value={entryLogRef.date} onChange={e=>setEntryLogRef({date:e.target.value,taskId:""})}>
+                <select style={{...S.select,flex:1}} value={entryLogRef.date}
+                  onChange={e=>setEntryLogRef({date:e.target.value,taskId:""})}>
                   <option value="">选择日期</option>
                   {logDates.map(d=><option key={d} value={d}>{d}</option>)}
                 </select>
-                <select style={{...S.select,flex:2}} value={entryLogRef.taskId} onChange={e=>setEntryLogRef({...entryLogRef,taskId:e.target.value})} disabled={!tasksForDate.length}>
+                <select style={{...S.select,flex:2}} value={entryLogRef.taskId}
+                  onChange={e=>setEntryLogRef({...entryLogRef,taskId:e.target.value})} disabled={!tasksForDate.length}>
                   <option value="">选择事项</option>
                   {tasksForDate.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
@@ -760,7 +854,6 @@ function KnowledgeTab({data,save}){
               </div>
             </div>
           )}
-
           {theme.entries.map(entry=>{
             const task=findTask(entry.logRef);
             return(
@@ -771,9 +864,7 @@ function KnowledgeTab({data,save}){
                     <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
                     {entry.logRef&&task&&(
                       <button style={{...S.btnSm("#f0f9ff","#2563eb"),border:"1px solid #bfdbfe",fontSize:10}}
-                        onClick={()=>setRefModal({task,date:entry.logRef.date})}>
-                        查看来源 →
-                      </button>
+                        onClick={()=>setRefModal({task,date:entry.logRef.date})}>查看来源 →</button>
                     )}
                   </div>
                   <button style={S.btnSm("#dc2626")} onClick={()=>removeEntry(theme.id,entry.id)}>删</button>
@@ -783,13 +874,12 @@ function KnowledgeTab({data,save}){
           })}
         </div>
       ))}
-
       {refModal&&(
         <div style={S.modal} onClick={e=>e.target===e.currentTarget&&setRefModal(null)}>
           <div style={S.modalBox}>
             <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>来源记录</div>
             <div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>{refModal.date}</div>
-            <div style={{padding:"12px",background:"#f9fafb",borderRadius:8,marginBottom:12}}>
+            <div style={{padding:12,background:"#f9fafb",borderRadius:8,marginBottom:12}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
                 <span style={{width:8,height:8,borderRadius:"50%",background:CATS.find(c=>c.key===refModal.task.cat)?.color||"#9ca3af",flexShrink:0}}/>
                 <span style={{fontSize:14,fontWeight:500}}>{refModal.task.name}</span>
@@ -798,9 +888,7 @@ function KnowledgeTab({data,save}){
                 {CATS.find(c=>c.key===refModal.task.cat)?.label} · {fmtMins(refModal.task.mins)}
               </div>
               {refModal.task.note&&(
-                <div style={{fontSize:13,color:"#374151",marginTop:8,paddingTop:8,borderTop:"1px solid #e5e7eb"}}>
-                  {refModal.task.note}
-                </div>
+                <div style={{fontSize:13,color:"#374151",marginTop:8,paddingTop:8,borderTop:"1px solid #e5e7eb"}}>{refModal.task.note}</div>
               )}
             </div>
             <button style={S.btn("#f9fafb","#374151")} onClick={()=>setRefModal(null)}>关闭</button>
@@ -814,30 +902,28 @@ function KnowledgeTab({data,save}){
 // ── Settings Tab ──────────────────────────────────────────
 function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
   syncStatus,syncMsg,lastSynced,isConfigured,connecting,connectGist,disconnectGist,manualSync}){
-  const [showToken,setShowToken] = useState(false);
-  const [showPwd,setShowPwd]     = useState(false);
+  const [showToken,setShowToken]=useState(false);
+  const [showPwd,setShowPwd]=useState(false);
 
-  const importData = e=>{
-    const file=e.target.files[0]; if(!file) return;
+  const importData=e=>{
+    const file=e.target.files[0];if(!file) return;
     const reader=new FileReader();
     reader.onload=async ev=>{
       try{
         const d=JSON.parse(ev.target.result);
-        // merge logs
-        const mergedLogs={...(d.logs||{})};
-        // merge pool
-        const mergedPool=d.pool||{projects:[],items:[]};
-        // merge knowledge
-        const mergedKnow=d.knowledge||{themes:[]};
-        await save({logs:mergedLogs,pool:mergedPool,knowledge:mergedKnow});
+        const merged={
+          logs:mergeLogs(d.logs||{},data.logs||{}),
+          pool:mergePool(d.pool||{projects:[],items:[]},data.pool||{projects:[],items:[]}),
+          knowledge:mergeKnowledge(d.knowledge||{themes:[]},data.knowledge||{themes:[]}),
+        };
+        await save(merged);
         alert("导入成功！");
-      }catch{ alert("文件格式有误，请使用本工具导出的备份文件"); }
+      }catch{alert("文件格式有误");}
     };
-    reader.readAsText(file); e.target.value="";
+    reader.readAsText(file);e.target.value="";
   };
 
   const syncColor={unconfigured:"#9ca3af",syncing:"#d97706",synced:"#059669",error:"#dc2626"}[syncStatus];
-  const syncLabel={unconfigured:"未配置",syncing:"同步中…",synced:"已同步",error:"同步失败"}[syncStatus];
 
   return(
     <>
@@ -854,7 +940,6 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
             未连接，数据仅保存在本设备
           </div>
         )}
-
         <label style={S.label}>GitHub Token</label>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           <input style={{...S.input,flex:1}} type={showToken?"text":"password"}
@@ -862,7 +947,6 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
             onChange={e=>setGhToken(e.target.value)} disabled={isConfigured}/>
           <button style={{...S.btnSm(),padding:"10px 12px"}} onClick={()=>setShowToken(v=>!v)}>{showToken?"隐藏":"显示"}</button>
         </div>
-
         <label style={S.label}>加密密码</label>
         <div style={{display:"flex",gap:6,marginBottom:4}}>
           <input style={{...S.input,flex:1}} type={showPwd?"text":"password"}
@@ -871,14 +955,12 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
           <button style={{...S.btnSm(),padding:"10px 12px"}} onClick={()=>setShowPwd(v=>!v)}>{showPwd?"隐藏":"显示"}</button>
         </div>
         <div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>数据上传前在本地加密，GitHub 只存密文。密码丢失数据无法恢复。</div>
-
         {syncMsg&&(
           <div style={{fontSize:12,color:syncStatus==="error"?"#dc2626":"#059669",marginBottom:10,
             padding:"8px 10px",background:syncStatus==="error"?"#fef2f2":"#f0fdf4",borderRadius:6}}>
             {syncMsg}
           </div>
         )}
-
         {!isConfigured?(
           <button style={S.btn()} onClick={connectGist} disabled={connecting}>
             {connecting?"连接中…":"连接 GitHub Gist"}
@@ -892,12 +974,11 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
           </div>
         )}
       </div>
-
       <div style={S.card}>
         <label style={S.label}>本地备份</label>
-        <div style={{fontSize:11,color:"#9ca3af",marginBottom:10}}>导入旧版追踪器数据（JSON格式）或导出加密备份</div>
+        <div style={{fontSize:11,color:"#9ca3af",marginBottom:10}}>导入旧版追踪器数据或导出备份</div>
         <label style={{display:"block",padding:"9px 0",background:"#f9fafb",border:"1px solid #e5e7eb",
-          borderRadius:8,color:"#374151",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"center",marginBottom:8}}>
+          borderRadius:8,color:"#374151",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"center"}}>
           ↑ 导入备份文件
           <input type="file" accept=".json" onChange={importData} style={{display:"none"}}/>
         </label>
@@ -906,8 +987,7 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
   );
 }
 
-// ── Mount ─────────────────────────────────────────────────
-const root = ReactDOM.createRoot(document.getElementById("root"));
+const root=ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App/>);
 </script>
 </body>
