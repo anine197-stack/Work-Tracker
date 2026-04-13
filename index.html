@@ -273,6 +273,30 @@ function App(){
     setConnecting(false);
   };
 
+  const connectExistingGist=async(existingId)=>{
+    if(!ghToken.trim()||!encPwd.trim()||!existingId.trim()){setSyncMsg("请填写 Token、加密密码和 Gist ID");return;}
+    setConnecting(true);setSyncMsg("");
+    try{
+      const raw=await GH.fetch(ghToken.trim(),existingId.trim());
+      if(!raw) throw new Error("Gist 内容为空");
+      const plain=await decryptStr(raw,encPwd);
+      const remote=JSON.parse(plain);
+      const local=LS.get("wt-data")||data;
+      const merged={
+        logs:mergeLogs(local.logs||{},remote.logs||{}),
+        pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+        knowledge:mergeKnowledge(local.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+      };
+      setData(merged);LS.set("wt-data",merged);
+      setGhGistId(existingId.trim());
+      LS.set("gh-token",ghToken.trim());LS.set("gh-gist-id",existingId.trim());LS.set("enc-pwd",encPwd);
+      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
+      setLastSynced(now);LS.set("last-synced",now);
+      setSyncStatus("synced");setSyncMsg("连接成功！数据已合并同步");
+    }catch(e){setSyncStatus("error");setSyncMsg("连接失败："+e.message);}
+    setConnecting(false);
+  };
+
   const disconnectGist=()=>{
     setGhToken("");setGhGistId("");setEncPwd("");setLastSynced("");
     setSyncStatus("unconfigured");setSyncMsg("");
@@ -311,6 +335,7 @@ function App(){
         encPwd={encPwd} setEncPwd={setEncPwd} syncStatus={syncStatus}
         syncMsg={syncMsg} lastSynced={lastSynced} isConfigured={isConfigured}
         connecting={connecting} connectGist={connectGist}
+        connectExistingGist={connectExistingGist}
         disconnectGist={disconnectGist} manualSync={manualSync}/>}
       <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>数据加密同步至 GitHub Gist</div>
     </div>
@@ -901,9 +926,11 @@ function KnowledgeTab({data,save}){
 
 // ── Settings Tab ──────────────────────────────────────────
 function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
-  syncStatus,syncMsg,lastSynced,isConfigured,connecting,connectGist,disconnectGist,manualSync}){
+  syncStatus,syncMsg,lastSynced,isConfigured,connecting,connectGist,connectExistingGist,disconnectGist,manualSync}){
   const [showToken,setShowToken]=useState(false);
   const [showPwd,setShowPwd]=useState(false);
+  const [existingId,setExistingId]=useState("");
+  const [connectMode,setConnectMode]=useState("new"); // "new" | "existing"
 
   const importData=e=>{
     const file=e.target.files[0];if(!file) return;
@@ -948,7 +975,7 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
           <button style={{...S.btnSm(),padding:"10px 12px"}} onClick={()=>setShowToken(v=>!v)}>{showToken?"隐藏":"显示"}</button>
         </div>
         <label style={S.label}>加密密码</label>
-        <div style={{display:"flex",gap:6,marginBottom:4}}>
+        <div style={{display:"flex",gap:6,marginBottom:12}}>
           <input style={{...S.input,flex:1}} type={showPwd?"text":"password"}
             placeholder="自定义加密密码（请牢记）" value={encPwd}
             onChange={e=>setEncPwd(e.target.value)} disabled={isConfigured}/>
@@ -962,9 +989,25 @@ function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
           </div>
         )}
         {!isConfigured?(
-          <button style={S.btn()} onClick={connectGist} disabled={connecting}>
-            {connecting?"连接中…":"连接 GitHub Gist"}
-          </button>
+          <>
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              <button style={{...S.btn(connectMode==="new"?"#2563eb":"#f9fafb",connectMode==="new"?"#fff":"#374151"),flex:1}}
+                onClick={()=>setConnectMode("new")}>新建 Gist</button>
+              <button style={{...S.btn(connectMode==="existing"?"#2563eb":"#f9fafb",connectMode==="existing"?"#fff":"#374151"),flex:1}}
+                onClick={()=>setConnectMode("existing")}>使用已有 Gist</button>
+            </div>
+            {connectMode==="existing"&&(
+              <div style={{marginBottom:12}}>
+                <label style={S.label}>已有 Gist ID</label>
+                <input style={{...S.input,marginBottom:4}} placeholder="粘贴 Gist ID" value={existingId}
+                  onChange={e=>setExistingId(e.target.value)}/>
+                <div style={{fontSize:11,color:"#9ca3af"}}>在 github.com → Your Gists 里找到对应 Gist，复制网址最后那串字符</div>
+              </div>
+            )}
+            <button style={S.btn()} onClick={()=>connectMode==="new"?connectGist():connectExistingGist(existingId)} disabled={connecting}>
+              {connecting?"连接中…":connectMode==="new"?"新建并连接":"连接已有 Gist"}
+            </button>
+          </>
         ):(
           <div style={{display:"flex",gap:8}}>
             <button style={{...S.btn("#2563eb"),flex:2}} onClick={manualSync} disabled={syncStatus==="syncing"}>
