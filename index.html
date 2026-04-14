@@ -556,7 +556,7 @@ function ExportModal({data,defaultDate,onClose}){
 
 // ── Pool Tab ──────────────────────────────────────────────
 function PoolTab({data,save}){
-  const [view,setView]=useState("flat");
+  const [view,setView]=useState("group");
   const [itemName,setItemName]=useState("");
   const [itemProj,setItemProj]=useState("");
   const [itemValue,setItemValue]=useState(1);
@@ -658,7 +658,7 @@ function PoolTab({data,save}){
                   <span style={S.badge(item.value===2?"#2563eb":item.value===1?"#4b5563":"#9ca3af")}>{VALUE[item.value]}价值</span>
                   <span style={S.badge(item.urgency===2?"#dc2626":item.urgency===1?"#d97706":"#9ca3af")}>{URGENCY[item.urgency]}</span>
                   {proj&&<span style={{fontSize:10,color:"#6b7280",background:"#f3f4f6",padding:"2px 6px",borderRadius:4}}>{proj.name}</span>}
-                  {days!==null&&<span style={{fontSize:11,color:days<=3?"#dc2626":days<=7?"#d97706":"#6b7280"}}>{days<=0?"已过期":`${days}天后截止`}</span>}
+                  {days!==null&&<span style={{fontSize:11,color:days<0?"#dc2626":days===0?"#d97706":days<=7?"#d97706":"#6b7280"}}>{days<0?"已过期":days===0?"今日截止":`${days}天后截止`}</span>}
                   {item.blocked&&<span style={{fontSize:11,color:"#9ca3af"}}>搁置中</span>}
                 </div>
               </div>
@@ -805,6 +805,7 @@ function KnowledgeTab({data,save}){
   const [entryContent,setEntryContent]=useState("");
   const [entryLogRef,setEntryLogRef]=useState({date:"",taskId:""});
   const [refModal,setRefModal]=useState(null);
+  const [editEntry,setEditEntry]=useState(null); // {themeId, entryId, content}
 
   const themes=data.knowledge?.themes||[];
   const saveKnow=k=>save({...data,knowledge:k});
@@ -820,6 +821,13 @@ function KnowledgeTab({data,save}){
       logRef:entryLogRef.date&&entryLogRef.taskId?entryLogRef:null,createdAt:today()};
     saveKnow({...data.knowledge,themes:themes.map(t=>t.id===activeTheme?{...t,entries:[...t.entries,entry]}:t)});
     setEntryContent("");setEntryLogRef({date:"",taskId:""});setShowAddEntry(false);
+  };
+  const saveEntryEdit=()=>{
+    if(!editEntry||!editEntry.content.trim()) return;
+    saveKnow({...data.knowledge,themes:themes.map(t=>t.id===editEntry.themeId
+      ?{...t,entries:t.entries.map(e=>e.id===editEntry.entryId?{...e,content:editEntry.content.trim()}:e)}
+      :t)});
+    setEditEntry(null);
   };
   const removeEntry=(themeId,entryId)=>{
     saveKnow({...data.knowledge,themes:themes.map(t=>t.id===themeId?{...t,entries:t.entries.filter(e=>e.id!==entryId)}:t)});
@@ -892,19 +900,36 @@ function KnowledgeTab({data,save}){
           )}
           {theme.entries.map(entry=>{
             const task=findTask(entry.logRef);
+            const isEditingEntry=editEntry?.entryId===entry.id&&editEntry?.themeId===theme.id;
             return(
               <div key={entry.id} style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6,borderLeft:"3px solid #2563eb"}}>
-                <div style={{fontSize:13,color:"#1a1d27",lineHeight:1.6,marginBottom:6}}>{entry.content}</div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
-                    {entry.logRef&&task&&(
-                      <button style={{...S.btnSm("#f0f9ff","#2563eb"),border:"1px solid #bfdbfe",fontSize:10}}
-                        onClick={()=>setRefModal({task,date:entry.logRef.date})}>查看来源 →</button>
-                    )}
+                {isEditingEntry?(
+                  <div>
+                    <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.content}
+                      onChange={e=>setEditEntry({...editEntry,content:e.target.value})}/>
+                    <div style={{display:"flex",gap:6}}>
+                      <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEntryEdit}>保存</button>
+                      <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditEntry(null)}>取消</button>
+                    </div>
                   </div>
-                  <button style={S.btnSm("#dc2626")} onClick={()=>removeEntry(theme.id,entry.id)}>删</button>
-                </div>
+                ):(
+                  <div>
+                    <div style={{fontSize:13,color:"#1a1d27",lineHeight:1.6,marginBottom:6}}>{entry.content}</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
+                        {entry.logRef&&task&&(
+                          <button style={{...S.btnSm("#f0f9ff","#2563eb"),border:"1px solid #bfdbfe",fontSize:10}}
+                            onClick={()=>setRefModal({task,date:entry.logRef.date})}>查看来源 →</button>
+                        )}
+                      </div>
+                      <div style={{display:"flex",gap:4}}>
+                        <button style={S.btnSm("#f59e0b")} onClick={()=>setEditEntry({themeId:theme.id,entryId:entry.id,content:entry.content})}>✎</button>
+                        <button style={S.btnSm("#dc2626")} onClick={()=>removeEntry(theme.id,entry.id)}>删</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
