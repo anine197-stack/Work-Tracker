@@ -44,22 +44,33 @@ function mergeLogs(local, remote) {
     if (!merged[date]) {
       merged[date] = local[date];
     } else {
-      const remoteIds = new Set(merged[date].map(t => t.id));
-      const newEntries = local[date].filter(t => !remoteIds.has(t.id));
-      merged[date] = [...merged[date], ...newEntries];
+      // prefer local version for existing entries, add new ones from local
+      const localMap = new Map(local[date].map(t=>[t.id,t]));
+      const remoteIds = new Set(merged[date].map(t=>t.id));
+      const updatedRemote = merged[date].map(t=>localMap.get(t.id)||t);
+      const newLocal = local[date].filter(t=>!remoteIds.has(t.id));
+      merged[date] = [...updatedRemote, ...newLocal];
     }
   });
   return merged;
 }
 
 function mergePool(local, remote) {
-  const remoteProjectIds = new Set((remote.projects||[]).map(p => p.id));
-  const newProjects = (local.projects||[]).filter(p => !remoteProjectIds.has(p.id));
-  const remoteItemIds = new Set((remote.items||[]).map(i => i.id));
-  const newItems = (local.items||[]).filter(i => !remoteItemIds.has(i.id));
+  const localItemMap = new Map((local.items||[]).map(i=>[i.id,i]));
+  const remoteProjMap = new Map((remote.projects||[]).map(p=>[p.id,p]));
+  const localProjMap = new Map((local.projects||[]).map(p=>[p.id,p]));
+  const remoteItemIds = new Set((remote.items||[]).map(i=>i.id));
+  const remoteProjIds = new Set((remote.projects||[]).map(p=>p.id));
+
+  // prefer local for existing items/projects
+  const mergedItems = (remote.items||[]).map(i=>localItemMap.get(i.id)||i);
+  const newItems = (local.items||[]).filter(i=>!remoteItemIds.has(i.id));
+  const mergedProjects = (remote.projects||[]).map(p=>localProjMap.get(p.id)||p);
+  const newProjects = (local.projects||[]).filter(p=>!remoteProjIds.has(p.id));
+
   return {
-    projects: [...(remote.projects||[]), ...newProjects],
-    items: [...(remote.items||[]), ...newItems],
+    projects:[...mergedProjects,...newProjects],
+    items:[...mergedItems,...newItems],
   };
 }
 
