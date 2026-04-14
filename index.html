@@ -75,16 +75,21 @@ function mergePool(local, remote) {
 }
 
 function mergeKnowledge(local, remote) {
-  const remoteThemeIds = new Set((remote.themes||[]).map(t => t.id));
-  const newThemes = (local.themes||[]).filter(t => !remoteThemeIds.has(t.id));
+  const localThemeMap = new Map((local.themes||[]).map(t=>[t.id,t]));
+  const remoteThemeIds = new Set((remote.themes||[]).map(t=>t.id));
   const mergedThemes = (remote.themes||[]).map(rt => {
-    const lt = (local.themes||[]).find(t => t.id === rt.id);
+    const lt = localThemeMap.get(rt.id);
     if (!lt) return rt;
-    const remoteEntryIds = new Set(rt.entries.map(e => e.id));
-    const newEntries = lt.entries.filter(e => !remoteEntryIds.has(e.id));
-    return {...rt, entries: [...rt.entries, ...newEntries]};
+    // prefer local entries for existing, add new ones from remote not in local
+    const localEntryMap = new Map(lt.entries.map(e=>[e.id,e]));
+    const localEntryIds = new Set(lt.entries.map(e=>e.id));
+    const remoteEntryIds = new Set(rt.entries.map(e=>e.id));
+    const mergedEntries = rt.entries.map(e=>localEntryMap.get(e.id)||e);
+    const newLocalEntries = lt.entries.filter(e=>!remoteEntryIds.has(e.id));
+    return {...rt, entries:[...mergedEntries,...newLocalEntries]};
   });
-  return {themes: [...mergedThemes, ...newThemes]};
+  const newThemes = (local.themes||[]).filter(t=>!remoteThemeIds.has(t.id));
+  return {themes:[...mergedThemes,...newThemes]};
 }
 
 // ── Crypto ────────────────────────────────────────────────
@@ -777,7 +782,7 @@ function PoolTab({data,save}){
             if(!its.length) return null;
             return(
               <div key={proj.id||"none"} style={{marginBottom:12}}>
-                <div style={{fontSize:12,fontWeight:600,color:"#6b7280",marginBottom:6}}>{proj.name}</div>
+                <div style={{fontSize:15,fontWeight:700,color:"#1a1d27",marginBottom:8,paddingBottom:6,borderBottom:"2px solid #e5e7eb"}}>{proj.name}</div>
                 {its.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)}
               </div>
             );
