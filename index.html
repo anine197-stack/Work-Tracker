@@ -810,6 +810,57 @@ function PoolTab({data,save}){
   );
 }
 
+// ── Markdown renderer (subset: h1-h3, bold, inline-code, code block, ul) ──
+function renderMd(text){
+  if(!text) return null;
+  const lines=text.split('\n');
+  const out=[];
+  let i=0;
+  while(i<lines.length){
+    const line=lines[i];
+    // fenced code block
+    if(line.trimStart().startsWith('```')){
+      const lang=line.trim().slice(3).trim();
+      const codeLines=[];
+      i++;
+      while(i<lines.length&&!lines[i].trimStart().startsWith('```')){codeLines.push(lines[i]);i++;}
+      out.push(<pre key={i} style={{background:"#f3f4f6",borderRadius:6,padding:"10px 12px",fontSize:12,overflowX:"auto",margin:"6px 0",fontFamily:"'Menlo','Consolas',monospace",color:"#1a1d27",lineHeight:1.6}}><code>{codeLines.join('\n')}</code></pre>);
+      i++;continue;
+    }
+    // headings
+    const h3=line.match(/^###\s+(.*)/);
+    const h2=line.match(/^##\s+(.*)/);
+    const h1=line.match(/^#\s+(.*)/);
+    if(h1){out.push(<div key={i} style={{fontWeight:700,fontSize:15,margin:"10px 0 4px",color:"#111318"}}>{inlineMd(h1[1])}</div>);i++;continue;}
+    if(h2){out.push(<div key={i} style={{fontWeight:700,fontSize:14,margin:"8px 0 4px",color:"#1a1d27"}}>{inlineMd(h2[1])}</div>);i++;continue;}
+    if(h3){out.push(<div key={i} style={{fontWeight:600,fontSize:13,margin:"6px 0 2px",color:"#374151"}}>{inlineMd(h3[1])}</div>);i++;continue;}
+    // unordered list item
+    const li=line.match(/^[-*]\s+(.*)/);
+    if(li){
+      const items=[li[1]];
+      i++;
+      while(i<lines.length&&lines[i].match(/^[-*]\s+(.*)/)){items.push(lines[i].match(/^[-*]\s+(.*)/)[1]);i++;}
+      out.push(<ul key={i} style={{margin:"4px 0 4px 16px",padding:0,listStyle:"disc"}}>{items.map((it,j)=><li key={j} style={{fontSize:13,color:"#374151",lineHeight:1.7}}>{inlineMd(it)}</li>)}</ul>);
+      continue;
+    }
+    // blank line
+    if(line.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
+    // paragraph
+    out.push(<div key={i} style={{fontSize:13,color:"#374151",lineHeight:1.7,margin:"2px 0"}}>{inlineMd(line)}</div>);
+    i++;
+  }
+  return out;
+}
+function inlineMd(text){
+  // split on **bold** and `code`
+  const parts=text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((p,i)=>{
+    if(p.startsWith('**')&&p.endsWith('**')) return <strong key={i} style={{fontWeight:600,color:"#111318"}}>{p.slice(2,-2)}</strong>;
+    if(p.startsWith('`')&&p.endsWith('`')) return <code key={i} style={{background:"#f3f4f6",borderRadius:3,padding:"1px 5px",fontSize:12,fontFamily:"'Menlo','Consolas',monospace",color:"#2563eb"}}>{p.slice(1,-1)}</code>;
+    return p;
+  });
+}
+
 // ── Knowledge Tab ─────────────────────────────────────────
 function KnowledgeTab({data,save}){
   const [search,setSearch]=useState("");
@@ -930,7 +981,7 @@ function KnowledgeTab({data,save}){
                   </div>
                 ):(
                   <div>
-                    <div style={{fontSize:13,color:"#1a1d27",lineHeight:1.6,marginBottom:6}}>{entry.content}</div>
+                    <div style={{marginBottom:6}}>{renderMd(entry.content)}</div>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
                         <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
