@@ -207,6 +207,7 @@ function App(){
                 logs:mergeLogs(saved.logs||{},remote.logs||{}),
                 pool:mergePool(saved.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
                 knowledge:mergeKnowledge(saved.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+                dailyNotes:{...(remote.dailyNotes||{}),...(saved.dailyNotes||{})},
               };
               setData(merged);
               LS.set("wt-data",merged);
@@ -248,6 +249,7 @@ function App(){
             logs:mergeLogs(newData.logs||{},remote.logs||{}),
             pool:mergePool(newData.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
             knowledge:mergeKnowledge(newData.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+            dailyNotes:{...(remote.dailyNotes||{}),...(newData.dailyNotes||{})},
           };
           setData(toSave);
           LS.set("wt-data",toSave);
@@ -274,6 +276,7 @@ function App(){
           logs:mergeLogs(local.logs||{},remote.logs||{}),
           pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
           knowledge:mergeKnowledge(local.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
+          dailyNotes:{...(remote.dailyNotes||{}),...(local.dailyNotes||{})},
         };
         setData(merged);LS.set("wt-data",merged);
         const enc=await encryptStr(JSON.stringify(merged),encPwd);
@@ -378,10 +381,23 @@ function LogTab({data,save}){
   const [note,setNote]=useState("");
   const [exportModal,setExportModal]=useState(false);
   const [editEntry,setEditEntry]=useState(null);
+  const [dailyNote,setDailyNote]=useState("");
+  const [noteLoaded,setNoteLoaded]=useState("");
 
   const entries=data.logs[selDate]||[];
   const totalMins=entries.reduce((s,t)=>s+t.mins,0);
   const shiftDate=d=>{const dt=new Date(selDate);dt.setDate(dt.getDate()+d);setSelDate(dt.toISOString().slice(0,10));};
+
+  useEffect(()=>{
+    const note=data.dailyNotes?.[selDate]||"";
+    setDailyNote(note);setNoteLoaded(note);
+  },[selDate,data.dailyNotes]);
+
+  const saveDailyNote=()=>{
+    if(dailyNote===noteLoaded) return;
+    save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
+    setNoteLoaded(dailyNote);
+  };
 
   const addTask=()=>{
     if(!name.trim()) return;
@@ -499,6 +515,12 @@ function LogTab({data,save}){
         </div>
       )}
       {exportModal&&<ExportModal data={data} defaultDate={selDate} onClose={()=>setExportModal(false)}/>}
+      <div style={S.card}>
+        <label style={S.label}>今日状态</label>
+        <textarea style={{...S.textarea,minHeight:72,color:"#6b7280"}} placeholder="今天状态怎样？有什么感受或想法…"
+          value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={saveDailyNote}/>
+        {dailyNote!==noteLoaded&&<div style={{fontSize:11,color:"#d97706",marginTop:4}}>未保存 · 点击外部自动保存</div>}
+      </div>
     </>
   );
 }
@@ -519,7 +541,10 @@ function ExportModal({data,defaultDate,onClose}){
     } else {
       Object.keys(data.logs).filter(d=>d>=from&&d<=to).forEach(d=>{logsToExport[d]=data.logs[d];});
     }
-    const payload=JSON.stringify({logs:logsToExport,pool:data.pool,knowledge:data.knowledge,exportedAt:new Date().toISOString()},null,2);
+    const notesToExport=mode==="today"
+      ?{[defaultDate]:data.dailyNotes?.[defaultDate]||""}
+      :Object.fromEntries(Object.entries(data.dailyNotes||{}).filter(([d])=>d>=from&&d<=to));
+    const payload=JSON.stringify({logs:logsToExport,dailyNotes:notesToExport,pool:data.pool,knowledge:data.knowledge,exportedAt:new Date().toISOString()},null,2);
     let content=payload;
     let filename=`work-tracker-${mode==="today"?defaultDate:`${from}_${to}`}.json`;
     if(type==="encrypted"){
@@ -810,57 +835,6 @@ function PoolTab({data,save}){
   );
 }
 
-// ── Markdown renderer (subset: h1-h3, bold, inline-code, code block, ul) ──
-function renderMd(text){
-  if(!text) return null;
-  const lines=text.split('\n');
-  const out=[];
-  let i=0;
-  while(i<lines.length){
-    const line=lines[i];
-    // fenced code block
-    if(line.trimStart().startsWith('```')){
-      const lang=line.trim().slice(3).trim();
-      const codeLines=[];
-      i++;
-      while(i<lines.length&&!lines[i].trimStart().startsWith('```')){codeLines.push(lines[i]);i++;}
-      out.push(<pre key={i} style={{background:"#f3f4f6",borderRadius:6,padding:"10px 12px",fontSize:12,overflowX:"auto",margin:"6px 0",fontFamily:"'Menlo','Consolas',monospace",color:"#1a1d27",lineHeight:1.6}}><code>{codeLines.join('\n')}</code></pre>);
-      i++;continue;
-    }
-    // headings
-    const h3=line.match(/^###\s+(.*)/);
-    const h2=line.match(/^##\s+(.*)/);
-    const h1=line.match(/^#\s+(.*)/);
-    if(h1){out.push(<div key={i} style={{fontWeight:700,fontSize:15,margin:"10px 0 4px",color:"#111318"}}>{inlineMd(h1[1])}</div>);i++;continue;}
-    if(h2){out.push(<div key={i} style={{fontWeight:700,fontSize:14,margin:"8px 0 4px",color:"#1a1d27"}}>{inlineMd(h2[1])}</div>);i++;continue;}
-    if(h3){out.push(<div key={i} style={{fontWeight:600,fontSize:13,margin:"6px 0 2px",color:"#374151"}}>{inlineMd(h3[1])}</div>);i++;continue;}
-    // unordered list item
-    const li=line.match(/^[-*]\s+(.*)/);
-    if(li){
-      const items=[li[1]];
-      i++;
-      while(i<lines.length&&lines[i].match(/^[-*]\s+(.*)/)){items.push(lines[i].match(/^[-*]\s+(.*)/)[1]);i++;}
-      out.push(<ul key={i} style={{margin:"4px 0 4px 16px",padding:0,listStyle:"disc"}}>{items.map((it,j)=><li key={j} style={{fontSize:13,color:"#374151",lineHeight:1.7}}>{inlineMd(it)}</li>)}</ul>);
-      continue;
-    }
-    // blank line
-    if(line.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
-    // paragraph
-    out.push(<div key={i} style={{fontSize:13,color:"#374151",lineHeight:1.7,margin:"2px 0"}}>{inlineMd(line)}</div>);
-    i++;
-  }
-  return out;
-}
-function inlineMd(text){
-  // split on **bold** and `code`
-  const parts=text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((p,i)=>{
-    if(p.startsWith('**')&&p.endsWith('**')) return <strong key={i} style={{fontWeight:600,color:"#111318"}}>{p.slice(2,-2)}</strong>;
-    if(p.startsWith('`')&&p.endsWith('`')) return <code key={i} style={{background:"#f3f4f6",borderRadius:3,padding:"1px 5px",fontSize:12,fontFamily:"'Menlo','Consolas',monospace",color:"#2563eb"}}>{p.slice(1,-1)}</code>;
-    return p;
-  });
-}
-
 // ── Knowledge Tab ─────────────────────────────────────────
 function KnowledgeTab({data,save}){
   const [search,setSearch]=useState("");
@@ -981,7 +955,7 @@ function KnowledgeTab({data,save}){
                   </div>
                 ):(
                   <div>
-                    <div style={{marginBottom:6}}>{renderMd(entry.content)}</div>
+                    <div style={{fontSize:13,color:"#1a1d27",lineHeight:1.6,marginBottom:6}}>{entry.content}</div>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
                         <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
