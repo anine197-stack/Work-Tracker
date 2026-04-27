@@ -195,6 +195,16 @@ modal:{position:“fixed”,top:0,left:0,right:0,bottom:0,background:“rgba(0,0
 modalBox:{background:”#fff”,borderRadius:16,padding:20,width:“100%”,maxWidth:480,maxHeight:“80vh”,overflowY:“auto”},
 };
 
+// ── Normalize (handles old data formats) ──────────────────
+function normalizeData(d){
+if(!d) return d;
+const k=d.knowledge||{};
+if(!k.domains){
+return {…d,knowledge:{domains:DOMAINS.map(dom=>({id:dom.id,themes:[]}))}};
+}
+return d;
+}
+
 // ── App ───────────────────────────────────────────────────
 function App(){
 const [tab,setTab]=useState(“log”);
@@ -236,21 +246,21 @@ LS.set(“wt-data”,merged);
 const enc=await encryptStr(JSON.stringify(merged),pwd);
 await GH.update(token,gistId,enc);
 } else {
-setData(remote);
+setData(normalizeData(remote));
 LS.set(“wt-data”,remote);
 }
 } else if(saved){
-setData(saved);
+setData(normalizeData(saved));
 }
 const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
 setLastSynced(now);LS.set(“last-synced”,now);
 setSyncStatus(“synced”);
 }catch(e){
 setSyncStatus(“error”);setSyncMsg(“拉取失败，使用本地数据”);
-if(saved) setData(saved);
+if(saved) setData(normalizeData(saved));
 }
 } else if(saved){
-setData(saved);
+setData(normalizeData(saved));
 }
 setLoading(false);
 })();
