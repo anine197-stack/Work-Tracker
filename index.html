@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"/>
@@ -22,1131 +23,1276 @@ textarea{resize:vertical}
 const {useState,useEffect,useCallback} = React;
 
 const CATS=[
-  {key:"core",    label:"核心价值",color:"#2563eb",desc:"管理分析、Agent开发、制度建设"},
-  {key:"routine", label:"常规运营",color:"#059669",desc:"日常记账、报税、审批"},
-  {key:"fragment",label:"碎片响应",color:"#d97706",desc:"临时沟通、被打断、救火"},
+{key:“core”,    label:“核心价值”,color:”#2563eb”,desc:“管理分析、Agent开发、制度建设”},
+{key:“routine”, label:“常规运营”,color:”#059669”,desc:“日常记账、报税、审批”},
+{key:“fragment”,label:“碎片响应”,color:”#d97706”,desc:“临时沟通、被打断、救火”},
 ];
-const URGENCY=["不急","一般","紧急"];
-const VALUE=["低","中","高"];
+const URGENCY=[“不急”,“一般”,“紧急”];
+const VALUE=[“低”,“中”,“高”];
+const DOMAINS=[
+{id:“d1”,label:“域一 财务核算与报表体系”},
+{id:“d2”,label:“域二 跨境业务财税”},
+{id:“d3”,label:“域三 业务决策支持”},
+{id:“d4”,label:“域四 公司治理与合规”},
+{id:“d5”,label:“域五 资本运作”},
+{id:“d6”,label:“域六 团队与组织管理”},
+{id:“d7”,label:“个人发展”},
+];
 const today=()=>new Date().toISOString().slice(0,10);
 const fmtMins=m=>m>=60?`${m/60}h`:`${m}m`;
 
 const LS={
-  get:(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
-  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
-  del:(k)=>{try{localStorage.removeItem(k)}catch{}},
+get:(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}},
+set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
+del:(k)=>{try{localStorage.removeItem(k)}catch{}},
 };
 
 // ── Merge helpers（软删除机制）────────────────────────────
 // 每条记录用updatedAt时间戳判断新旧，删除时标记_deleted而非真正移除
 function mergeById(localArr, remoteArr) {
-  const map = new Map();
-  for (const item of (remoteArr||[])) map.set(item.id, item);
-  for (const item of (localArr||[])) {
-    const existing = map.get(item.id);
-    if (!existing) { map.set(item.id, item); }
-    else {
-      const lt = item.updatedAt||item.id;
-      const rt = existing.updatedAt||existing.id;
-      if (lt >= rt) map.set(item.id, item);
-    }
-  }
-  return Array.from(map.values()).filter(i=>!i._deleted);
+const map = new Map();
+for (const item of (remoteArr||[])) map.set(item.id, item);
+for (const item of (localArr||[])) {
+const existing = map.get(item.id);
+if (!existing) { map.set(item.id, item); }
+else {
+const lt = item.updatedAt||item.id;
+const rt = existing.updatedAt||existing.id;
+if (lt >= rt) map.set(item.id, item);
+}
+}
+return Array.from(map.values()).filter(i=>!i._deleted);
 }
 
 function mergeLogs(local, remote) {
-  const allDates = new Set([...Object.keys(local||{}), ...Object.keys(remote||{})]);
-  const merged = {};
-  for (const date of allDates) {
-    const entries = mergeById(local[date]||[], remote[date]||[]);
-    if (entries.length > 0) merged[date] = entries;
-  }
-  return merged;
+const allDates = new Set([…Object.keys(local||{}), …Object.keys(remote||{})]);
+const merged = {};
+for (const date of allDates) {
+const entries = mergeById(local[date]||[], remote[date]||[]);
+if (entries.length > 0) merged[date] = entries;
+}
+return merged;
 }
 
 function mergePool(local, remote) {
-  return {
-    projects: mergeById(local.projects||[], remote.projects||[]),
-    items: mergeById(local.items||[], remote.items||[]),
-  };
+return {
+projects: mergeById(local.projects||[], remote.projects||[]),
+items: mergeById(local.items||[], remote.items||[]),
+};
 }
 
 function mergeKnowledge(local, remote) {
-  const localThemeMap = new Map((local.themes||[]).map(t=>[t.id,t]));
-  const remoteThemeMap = new Map((remote.themes||[]).map(t=>[t.id,t]));
-  const allIds = new Set([...localThemeMap.keys(), ...remoteThemeMap.keys()]);
-  const themes = [];
-  for (const id of allIds) {
-    const lt = localThemeMap.get(id);
-    const rt = remoteThemeMap.get(id);
-    if (!lt && rt?._deleted) continue;
-    if (!rt && lt?._deleted) continue;
-    if (!lt) { if (!rt._deleted) themes.push(rt); continue; }
-    if (!rt) { if (!lt._deleted) themes.push(lt); continue; }
-    const base = (lt.updatedAt||lt.id) >= (rt.updatedAt||rt.id) ? lt : rt;
-    if (base._deleted) continue;
-    themes.push({...base, entries: mergeById(lt.entries||[], rt.entries||[])});
-  }
-  return {themes};
+// themes are now domain-scoped; merge flat by theme id across all domains
+const getAllThemes = k => (k.domains||[]).flatMap(d=>(d.themes||[]).map(t=>({…t,domainId:d.id})));
+const localThemes = getAllThemes(local);
+const remoteThemes = getAllThemes(remote);
+const localMap = new Map(localThemes.map(t=>[t.id,t]));
+const remoteMap = new Map(remoteThemes.map(t=>[t.id,t]));
+const allIds = new Set([…localMap.keys(),…remoteMap.keys()]);
+const mergedThemes = [];
+for(const id of allIds){
+const lt=localMap.get(id), rt=remoteMap.get(id);
+if(!lt&&rt?._deleted) continue;
+if(!rt&&lt?._deleted) continue;
+if(!lt){if(!rt._deleted) mergedThemes.push(rt); continue;}
+if(!rt){if(!lt._deleted) mergedThemes.push(lt); continue;}
+const base=(lt.updatedAt||lt.id)>=(rt.updatedAt||rt.id)?lt:rt;
+if(base._deleted) continue;
+mergedThemes.push({…base,entries:mergeById(lt.entries||[],rt.entries||[])});
+}
+// reassemble into domains structure
+const domains = DOMAINS.map(d=>({
+id:d.id,
+themes:mergedThemes.filter(t=>t.domainId===d.id).map(({domainId,…t})=>t),
+}));
+return {domains};
 }
 
 // 软删除：标记_deleted+updatedAt而非真正移除
 function softDelete(arr, id) {
-  return arr.map(i=>i.id===id?{...i,_deleted:true,updatedAt:Date.now()}:i);
+return arr.map(i=>i.id===id?{…i,_deleted:true,updatedAt:Date.now()}:i);
 }
-function softDeleteTheme(themes, id) {
-  return themes.map(t=>t.id===id?{...t,_deleted:true,updatedAt:Date.now()}:t);
+function softDeleteTheme(domains, domainId, themeId) {
+return domains.map(d=>d.id===domainId
+?{…d,themes:d.themes.map(t=>t.id===themeId?{…t,_deleted:true,updatedAt:Date.now()}:t)}
+:d);
 }
-function softDeleteEntry(themes, themeId, entryId) {
-  return themes.map(t=>t.id===themeId
-    ?{...t,updatedAt:Date.now(),entries:softDelete(t.entries,entryId)}
-    :t);
+function softDeleteEntry(domains, domainId, themeId, entryId) {
+return domains.map(d=>d.id===domainId
+?{…d,themes:d.themes.map(t=>t.id===themeId
+?{…t,updatedAt:Date.now(),entries:softDelete(t.entries,entryId)}
+:t)}
+:d);
 }
 
 // ── Crypto ────────────────────────────────────────────────
 async function deriveKey(pwd){
-  const enc=new TextEncoder();
-  const km=await crypto.subtle.importKey("raw",enc.encode(pwd),"PBKDF2",false,["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    {name:"PBKDF2",salt:enc.encode("wt-salt-v1"),iterations:100000,hash:"SHA-256"},
-    km,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+const enc=new TextEncoder();
+const km=await crypto.subtle.importKey(“raw”,enc.encode(pwd),“PBKDF2”,false,[“deriveKey”]);
+return crypto.subtle.deriveKey(
+{name:“PBKDF2”,salt:enc.encode(“wt-salt-v1”),iterations:100000,hash:“SHA-256”},
+km,{name:“AES-GCM”,length:256},false,[“encrypt”,“decrypt”]);
 }
 async function encryptStr(text,pwd){
-  const key=await deriveKey(pwd);
-  const iv=crypto.getRandomValues(new Uint8Array(12));
-  const buf=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(text));
-  const out=new Uint8Array(12+buf.byteLength);
-  out.set(iv);out.set(new Uint8Array(buf),12);
-  return btoa(String.fromCharCode(...out));
+const key=await deriveKey(pwd);
+const iv=crypto.getRandomValues(new Uint8Array(12));
+const buf=await crypto.subtle.encrypt({name:“AES-GCM”,iv},key,new TextEncoder().encode(text));
+const out=new Uint8Array(12+buf.byteLength);
+out.set(iv);out.set(new Uint8Array(buf),12);
+return btoa(String.fromCharCode(…out));
 }
 async function decryptStr(b64,pwd){
-  const key=await deriveKey(pwd);
-  const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
-  const dec=await crypto.subtle.decrypt({name:"AES-GCM",iv:buf.slice(0,12)},key,buf.slice(12));
-  return new TextDecoder().decode(dec);
+const key=await deriveKey(pwd);
+const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+const dec=await crypto.subtle.decrypt({name:“AES-GCM”,iv:buf.slice(0,12)},key,buf.slice(12));
+return new TextDecoder().decode(dec);
 }
 
 // ── GitHub Gist ───────────────────────────────────────────
 const GH={
-  async create(token,content){
-    const r=await fetch("https://api.github.com/gists",{
-      method:"POST",
-      headers:{Authorization:`token ${token}`,"Content-Type":"application/json"},
-      body:JSON.stringify({description:"work-tracker-data",public:false,files:{"wt.txt":{content}}})
-    });
-    const j=await r.json();
-    if(!j.id) throw new Error(j.message||"创建失败");
-    return j.id;
-  },
-  async update(token,id,content){
-    const r=await fetch(`https://api.github.com/gists/${id}`,{
-      method:"PATCH",
-      headers:{Authorization:`token ${token}`,"Content-Type":"application/json"},
-      body:JSON.stringify({files:{"wt.txt":{content}}})
-    });
-    if(!r.ok) throw new Error("更新失败");
-  },
-  async fetch(token,id){
-    const r=await fetch(`https://api.github.com/gists/${id}`,{
-      headers:{Authorization:`token ${token}`}
-    });
-    const j=await r.json();
-    return j.files?.["wt.txt"]?.content||null;
-  }
+async create(token,content){
+const r=await fetch(“https://api.github.com/gists”,{
+method:“POST”,
+headers:{Authorization:`token ${token}`,“Content-Type”:“application/json”},
+body:JSON.stringify({description:“work-tracker-data”,public:false,files:{“wt.txt”:{content}}})
+});
+const j=await r.json();
+if(!j.id) throw new Error(j.message||“创建失败”);
+return j.id;
+},
+async update(token,id,content){
+const r=await fetch(`https://api.github.com/gists/${id}`,{
+method:“PATCH”,
+headers:{Authorization:`token ${token}`,“Content-Type”:“application/json”},
+body:JSON.stringify({files:{“wt.txt”:{content}}})
+});
+if(!r.ok) throw new Error(“更新失败”);
+},
+async fetch(token,id){
+const r=await fetch(`https://api.github.com/gists/${id}`,{
+headers:{Authorization:`token ${token}`}
+});
+const j=await r.json();
+return j.files?.[“wt.txt”]?.content||null;
+}
 };
 
 // ── Styles ────────────────────────────────────────────────
 const S={
-  app:{maxWidth:520,margin:"0 auto",padding:"16px 12px",minHeight:"100vh",background:"#f5f6fa"},
-  card:{background:"#fff",borderRadius:12,padding:16,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"},
-  input:{width:"100%",padding:"10px 12px",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,color:"#1a1d27",fontSize:14,outline:"none"},
-  textarea:{width:"100%",padding:"10px 12px",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,color:"#1a1d27",fontSize:13,outline:"none",minHeight:60},
-  select:{padding:"10px 12px",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,color:"#1a1d27",fontSize:13,outline:"none",width:"100%"},
-  btn:(bg,c)=>({padding:"10px 0",background:bg||"#2563eb",color:c||"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",width:"100%"}),
-  btnSm:(bg,c)=>({padding:"4px 10px",background:bg||"#e5e7eb",color:c||(bg&&bg!=="#e5e7eb"?"#fff":"#374151"),border:"none",borderRadius:6,fontSize:11,cursor:"pointer",whiteSpace:"nowrap"}),
-  label:{fontSize:11,color:"#9ca3af",fontWeight:600,marginBottom:6,display:"block",textTransform:"uppercase",letterSpacing:1},
-  row:{display:"flex",gap:8,alignItems:"flex-start"},
-  badge:(bg)=>({display:"inline-block",padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:600,background:bg,color:"#fff",marginRight:4}),
-  tabs:{display:"flex",background:"#e5e7eb",borderRadius:10,padding:3,marginBottom:20},
-  tab:(a)=>({flex:1,padding:"9px 0",textAlign:"center",fontSize:11,fontWeight:600,border:"none",borderRadius:8,cursor:"pointer",background:a?"#2563eb":"transparent",color:a?"#fff":"#6b7280"}),
-  modal:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:16},
-  modalBox:{background:"#fff",borderRadius:16,padding:20,width:"100%",maxWidth:480,maxHeight:"80vh",overflowY:"auto"},
+app:{maxWidth:520,margin:“0 auto”,padding:“16px 12px”,minHeight:“100vh”,background:”#f5f6fa”},
+card:{background:”#fff”,borderRadius:12,padding:16,marginBottom:12,boxShadow:“0 1px 4px rgba(0,0,0,.07)”},
+input:{width:“100%”,padding:“10px 12px”,background:”#f9fafb”,border:“1px solid #e5e7eb”,borderRadius:8,color:”#1a1d27”,fontSize:14,outline:“none”},
+textarea:{width:“100%”,padding:“10px 12px”,background:”#f9fafb”,border:“1px solid #e5e7eb”,borderRadius:8,color:”#1a1d27”,fontSize:13,outline:“none”,minHeight:60},
+select:{padding:“10px 12px”,background:”#f9fafb”,border:“1px solid #e5e7eb”,borderRadius:8,color:”#1a1d27”,fontSize:13,outline:“none”,width:“100%”},
+btn:(bg,c)=>({padding:“10px 0”,background:bg||”#2563eb”,color:c||”#fff”,border:“none”,borderRadius:8,fontSize:13,fontWeight:600,cursor:“pointer”,width:“100%”}),
+btnSm:(bg,c)=>({padding:“4px 10px”,background:bg||”#e5e7eb”,color:c||(bg&&bg!==”#e5e7eb”?”#fff”:”#374151”),border:“none”,borderRadius:6,fontSize:11,cursor:“pointer”,whiteSpace:“nowrap”}),
+label:{fontSize:11,color:”#9ca3af”,fontWeight:600,marginBottom:6,display:“block”,textTransform:“uppercase”,letterSpacing:1},
+row:{display:“flex”,gap:8,alignItems:“flex-start”},
+badge:(bg)=>({display:“inline-block”,padding:“2px 8px”,borderRadius:4,fontSize:10,fontWeight:600,background:bg,color:”#fff”,marginRight:4}),
+tabs:{display:“flex”,background:”#e5e7eb”,borderRadius:10,padding:3,marginBottom:20},
+tab:(a)=>({flex:1,padding:“9px 0”,textAlign:“center”,fontSize:11,fontWeight:600,border:“none”,borderRadius:8,cursor:“pointer”,background:a?”#2563eb”:“transparent”,color:a?”#fff”:”#6b7280”}),
+modal:{position:“fixed”,top:0,left:0,right:0,bottom:0,background:“rgba(0,0,0,.4)”,display:“flex”,alignItems:“center”,justifyContent:“center”,zIndex:100,padding:16},
+modalBox:{background:”#fff”,borderRadius:16,padding:20,width:“100%”,maxWidth:480,maxHeight:“80vh”,overflowY:“auto”},
 };
 
 // ── App ───────────────────────────────────────────────────
 function App(){
-  const [tab,setTab]=useState("log");
-  const [data,setData]=useState({logs:{},pool:{projects:[],items:[]},knowledge:{themes:[]}});
-  const [loading,setLoading]=useState(true);
-  const [ghToken,setGhToken]=useState("");
-  const [ghGistId,setGhGistId]=useState("");
-  const [encPwd,setEncPwd]=useState("");
-  const [syncStatus,setSyncStatus]=useState("unconfigured");
-  const [syncMsg,setSyncMsg]=useState("");
-  const [lastSynced,setLastSynced]=useState("");
-  const [connecting,setConnecting]=useState(false);
-  const isConfigured=!!(ghToken&&ghGistId&&encPwd);
+const [tab,setTab]=useState(“log”);
+const [data,setData]=useState({logs:{},pool:{projects:[],items:[]},knowledge:{domains:DOMAINS.map(d=>({id:d.id,themes:[]}))}});
+const [loading,setLoading]=useState(true);
+const [ghToken,setGhToken]=useState(””);
+const [ghGistId,setGhGistId]=useState(””);
+const [encPwd,setEncPwd]=useState(””);
+const [syncStatus,setSyncStatus]=useState(“unconfigured”);
+const [syncMsg,setSyncMsg]=useState(””);
+const [lastSynced,setLastSynced]=useState(””);
+const [connecting,setConnecting]=useState(false);
+const isConfigured=!!(ghToken&&ghGistId&&encPwd);
 
-  useEffect(()=>{
-    (async()=>{
-      const saved=LS.get("wt-data");
-      const token=LS.get("gh-token")||"";
-      const gistId=LS.get("gh-gist-id")||"";
-      const pwd=LS.get("enc-pwd")||"";
-      const ls_=LS.get("last-synced")||"";
-      setGhToken(token);setGhGistId(gistId);setEncPwd(pwd);setLastSynced(ls_);
-      if(token&&gistId&&pwd){
-        setSyncStatus("syncing");
-        try{
-          const raw=await GH.fetch(token,gistId);
-          if(raw){
-            const plain=await decryptStr(raw,pwd);
-            const remote=JSON.parse(plain);
-            if(saved){
-              const merged={
-                logs:mergeLogs(saved.logs||{},remote.logs||{}),
-                pool:mergePool(saved.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
-                knowledge:mergeKnowledge(saved.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
-                dailyNotes:{...(remote.dailyNotes||{}),...(saved.dailyNotes||{})},
-              };
-              setData(merged);
-              LS.set("wt-data",merged);
-              const enc=await encryptStr(JSON.stringify(merged),pwd);
-              await GH.update(token,gistId,enc);
-            } else {
-              setData(remote);
-              LS.set("wt-data",remote);
-            }
-          } else if(saved){
-            setData(saved);
-          }
-          const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-          setLastSynced(now);LS.set("last-synced",now);
-          setSyncStatus("synced");
-        }catch(e){
-          setSyncStatus("error");setSyncMsg("拉取失败，使用本地数据");
-          if(saved) setData(saved);
-        }
-      } else if(saved){
-        setData(saved);
-      }
-      setLoading(false);
-    })();
-  },[]);
+useEffect(()=>{
+(async()=>{
+const saved=LS.get(“wt-data”);
+const token=LS.get(“gh-token”)||””;
+const gistId=LS.get(“gh-gist-id”)||””;
+const pwd=LS.get(“enc-pwd”)||””;
+const ls_=LS.get(“last-synced”)||””;
+setGhToken(token);setGhGistId(gistId);setEncPwd(pwd);setLastSynced(ls_);
+if(token&&gistId&&pwd){
+setSyncStatus(“syncing”);
+try{
+const raw=await GH.fetch(token,gistId);
+if(raw){
+const plain=await decryptStr(raw,pwd);
+const remote=JSON.parse(plain);
+if(saved){
+const merged={
+logs:mergeLogs(saved.logs||{},remote.logs||{}),
+pool:mergePool(saved.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+knowledge:mergeKnowledge(saved.knowledge||{domains:[]},remote.knowledge||{domains:[]}),
+dailyNotes:{…(remote.dailyNotes||{}),…(saved.dailyNotes||{})},
+};
+setData(merged);
+LS.set(“wt-data”,merged);
+const enc=await encryptStr(JSON.stringify(merged),pwd);
+await GH.update(token,gistId,enc);
+} else {
+setData(remote);
+LS.set(“wt-data”,remote);
+}
+} else if(saved){
+setData(saved);
+}
+const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
+setLastSynced(now);LS.set(“last-synced”,now);
+setSyncStatus(“synced”);
+}catch(e){
+setSyncStatus(“error”);setSyncMsg(“拉取失败，使用本地数据”);
+if(saved) setData(saved);
+}
+} else if(saved){
+setData(saved);
+}
+setLoading(false);
+})();
+},[]);
 
-  const save=useCallback(async(newData)=>{
-    setData(newData);
-    LS.set("wt-data",newData);
-    if(ghToken&&ghGistId&&encPwd){
-      setSyncStatus("syncing");
-      try{
-        const raw=await GH.fetch(ghToken,ghGistId);
-        let toSave=newData;
-        if(raw){
-          const plain=await decryptStr(raw,encPwd);
-          const remote=JSON.parse(plain);
-          toSave={
-            logs:mergeLogs(newData.logs||{},remote.logs||{}),
-            pool:mergePool(newData.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
-            knowledge:mergeKnowledge(newData.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
-            dailyNotes:{...(remote.dailyNotes||{}),...(newData.dailyNotes||{})},
-          };
-          setData(toSave);
-          LS.set("wt-data",toSave);
-        }
-        const enc=await encryptStr(JSON.stringify(toSave),encPwd);
-        await GH.update(ghToken,ghGistId,enc);
-        const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-        setLastSynced(now);LS.set("last-synced",now);
-        setSyncStatus("synced");
-      }catch{setSyncStatus("error");setSyncMsg("同步失败，已保存本地");}
-    }
-  },[ghToken,ghGistId,encPwd]);
+const save=useCallback(async(newData)=>{
+setData(newData);
+LS.set(“wt-data”,newData);
+if(ghToken&&ghGistId&&encPwd){
+setSyncStatus(“syncing”);
+try{
+const raw=await GH.fetch(ghToken,ghGistId);
+let toSave=newData;
+if(raw){
+const plain=await decryptStr(raw,encPwd);
+const remote=JSON.parse(plain);
+toSave={
+logs:mergeLogs(newData.logs||{},remote.logs||{}),
+pool:mergePool(newData.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+knowledge:mergeKnowledge(newData.knowledge||{domains:[]},remote.knowledge||{domains:[]}),
+dailyNotes:{…(remote.dailyNotes||{}),…(newData.dailyNotes||{})},
+};
+setData(toSave);
+LS.set(“wt-data”,toSave);
+}
+const enc=await encryptStr(JSON.stringify(toSave),encPwd);
+await GH.update(ghToken,ghGistId,enc);
+const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
+setLastSynced(now);LS.set(“last-synced”,now);
+setSyncStatus(“synced”);
+}catch{setSyncStatus(“error”);setSyncMsg(“同步失败，已保存本地”);}
+}
+},[ghToken,ghGistId,encPwd]);
 
-  const manualSync=async()=>{
-    if(!isConfigured) return;
-    setSyncStatus("syncing");setSyncMsg("");
-    try{
-      const raw=await GH.fetch(ghToken,ghGistId);
-      if(raw){
-        const plain=await decryptStr(raw,encPwd);
-        const remote=JSON.parse(plain);
-        const local=LS.get("wt-data")||data;
-        const merged={
-          logs:mergeLogs(local.logs||{},remote.logs||{}),
-          pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
-          knowledge:mergeKnowledge(local.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
-          dailyNotes:{...(remote.dailyNotes||{}),...(local.dailyNotes||{})},
-        };
-        setData(merged);LS.set("wt-data",merged);
-        const enc=await encryptStr(JSON.stringify(merged),encPwd);
-        await GH.update(ghToken,ghGistId,enc);
-      }
-      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-      setLastSynced(now);LS.set("last-synced",now);
-      setSyncStatus("synced");setSyncMsg("同步完成");
-    }catch(e){setSyncStatus("error");setSyncMsg("同步失败："+e.message);}
-  };
+const manualSync=async()=>{
+if(!isConfigured) return;
+setSyncStatus(“syncing”);setSyncMsg(””);
+try{
+const raw=await GH.fetch(ghToken,ghGistId);
+if(raw){
+const plain=await decryptStr(raw,encPwd);
+const remote=JSON.parse(plain);
+const local=LS.get(“wt-data”)||data;
+const merged={
+logs:mergeLogs(local.logs||{},remote.logs||{}),
+pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+knowledge:mergeKnowledge(local.knowledge||{domains:[]},remote.knowledge||{domains:[]}),
+dailyNotes:{…(remote.dailyNotes||{}),…(local.dailyNotes||{})},
+};
+setData(merged);LS.set(“wt-data”,merged);
+const enc=await encryptStr(JSON.stringify(merged),encPwd);
+await GH.update(ghToken,ghGistId,enc);
+}
+const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
+setLastSynced(now);LS.set(“last-synced”,now);
+setSyncStatus(“synced”);setSyncMsg(“同步完成”);
+}catch(e){setSyncStatus(“error”);setSyncMsg(“同步失败：”+e.message);}
+};
 
-  const connectGist=async()=>{
-    if(!ghToken.trim()||!encPwd.trim()){setSyncMsg("请填写 Token 和加密密码");return;}
-    setConnecting(true);setSyncMsg("");
-    try{
-      const enc=await encryptStr(JSON.stringify(data),encPwd);
-      const id=await GH.create(ghToken.trim(),enc);
-      setGhGistId(id);
-      LS.set("gh-token",ghToken.trim());LS.set("gh-gist-id",id);LS.set("enc-pwd",encPwd);
-      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-      setLastSynced(now);LS.set("last-synced",now);
-      setSyncStatus("synced");setSyncMsg("连接成功！数据已加密上传");
-    }catch(e){setSyncStatus("error");setSyncMsg("连接失败："+e.message);}
-    setConnecting(false);
-  };
+const connectGist=async()=>{
+if(!ghToken.trim()||!encPwd.trim()){setSyncMsg(“请填写 Token 和加密密码”);return;}
+setConnecting(true);setSyncMsg(””);
+try{
+const enc=await encryptStr(JSON.stringify(data),encPwd);
+const id=await GH.create(ghToken.trim(),enc);
+setGhGistId(id);
+LS.set(“gh-token”,ghToken.trim());LS.set(“gh-gist-id”,id);LS.set(“enc-pwd”,encPwd);
+const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
+setLastSynced(now);LS.set(“last-synced”,now);
+setSyncStatus(“synced”);setSyncMsg(“连接成功！数据已加密上传”);
+}catch(e){setSyncStatus(“error”);setSyncMsg(“连接失败：”+e.message);}
+setConnecting(false);
+};
 
-  const connectExistingGist=async(existingId)=>{
-    if(!ghToken.trim()||!encPwd.trim()||!existingId.trim()){setSyncMsg("请填写 Token、加密密码和 Gist ID");return;}
-    setConnecting(true);setSyncMsg("");
-    try{
-      const raw=await GH.fetch(ghToken.trim(),existingId.trim());
-      if(!raw) throw new Error("Gist 内容为空");
-      const plain=await decryptStr(raw,encPwd);
-      const remote=JSON.parse(plain);
-      const local=LS.get("wt-data")||data;
-      const merged={
-        logs:mergeLogs(local.logs||{},remote.logs||{}),
-        pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
-        knowledge:mergeKnowledge(local.knowledge||{themes:[]},remote.knowledge||{themes:[]}),
-      };
-      setData(merged);LS.set("wt-data",merged);
-      setGhGistId(existingId.trim());
-      LS.set("gh-token",ghToken.trim());LS.set("gh-gist-id",existingId.trim());LS.set("enc-pwd",encPwd);
-      const now=new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
-      setLastSynced(now);LS.set("last-synced",now);
-      setSyncStatus("synced");setSyncMsg("连接成功！数据已合并同步");
-    }catch(e){setSyncStatus("error");setSyncMsg("连接失败："+e.message);}
-    setConnecting(false);
-  };
+const connectExistingGist=async(existingId)=>{
+if(!ghToken.trim()||!encPwd.trim()||!existingId.trim()){setSyncMsg(“请填写 Token、加密密码和 Gist ID”);return;}
+setConnecting(true);setSyncMsg(””);
+try{
+const raw=await GH.fetch(ghToken.trim(),existingId.trim());
+if(!raw) throw new Error(“Gist 内容为空”);
+const plain=await decryptStr(raw,encPwd);
+const remote=JSON.parse(plain);
+const local=LS.get(“wt-data”)||data;
+const merged={
+logs:mergeLogs(local.logs||{},remote.logs||{}),
+pool:mergePool(local.pool||{projects:[],items:[]},remote.pool||{projects:[],items:[]}),
+knowledge:mergeKnowledge(local.knowledge||{domains:[]},remote.knowledge||{domains:[]}),
+};
+setData(merged);LS.set(“wt-data”,merged);
+setGhGistId(existingId.trim());
+LS.set(“gh-token”,ghToken.trim());LS.set(“gh-gist-id”,existingId.trim());LS.set(“enc-pwd”,encPwd);
+const now=new Date().toLocaleTimeString(“zh-CN”,{hour:“2-digit”,minute:“2-digit”});
+setLastSynced(now);LS.set(“last-synced”,now);
+setSyncStatus(“synced”);setSyncMsg(“连接成功！数据已合并同步”);
+}catch(e){setSyncStatus(“error”);setSyncMsg(“连接失败：”+e.message);}
+setConnecting(false);
+};
 
-  const disconnectGist=()=>{
-    setGhToken("");setGhGistId("");setEncPwd("");setLastSynced("");
-    setSyncStatus("unconfigured");setSyncMsg("");
-    LS.del("gh-token");LS.del("gh-gist-id");LS.del("enc-pwd");LS.del("last-synced");
-  };
+const disconnectGist=()=>{
+setGhToken(””);setGhGistId(””);setEncPwd(””);setLastSynced(””);
+setSyncStatus(“unconfigured”);setSyncMsg(””);
+LS.del(“gh-token”);LS.del(“gh-gist-id”);LS.del(“enc-pwd”);LS.del(“last-synced”);
+};
 
-  const syncColor={unconfigured:"#9ca3af",syncing:"#d97706",synced:"#059669",error:"#dc2626"}[syncStatus];
-  const syncLabel={unconfigured:"未同步",syncing:"同步中…",synced:"已同步",error:"同步失败"}[syncStatus];
+const syncColor={unconfigured:”#9ca3af”,syncing:”#d97706”,synced:”#059669”,error:”#dc2626”}[syncStatus];
+const syncLabel={unconfigured:“未同步”,syncing:“同步中…”,synced:“已同步”,error:“同步失败”}[syncStatus];
 
-  if(loading) return <div style={{...S.app,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><p style={{color:"#9ca3af"}}>加载中…</p></div>;
+if(loading) return <div style={{…S.app,display:“flex”,alignItems:“center”,justifyContent:“center”,minHeight:“100vh”}}><p style={{color:”#9ca3af”}}>加载中…</p></div>;
 
-  return(
-    <div style={S.app}>
-      <div style={{textAlign:"center",marginBottom:20}}>
-        <div style={{fontSize:15,fontWeight:700,letterSpacing:1,color:"#111318"}}>WORK TRACKER</div>
-        <div style={{fontSize:11,color:"#9ca3af",marginTop:4,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-          记录 · 待办 · 知识库
-          <span style={{display:"inline-flex",alignItems:"center",gap:3,color:syncColor}}>
-            <span style={{width:6,height:6,borderRadius:"50%",background:syncColor,display:"inline-block"}}/>
-            {syncLabel}
-            {lastSynced&&syncStatus==="synced"&&<span style={{color:"#9ca3af"}}>· {lastSynced}</span>}
-          </span>
-        </div>
-      </div>
-      <div style={S.tabs}>
-        <button style={S.tab(tab==="log")}       onClick={()=>setTab("log")}>每日记录</button>
-        <button style={S.tab(tab==="pool")}      onClick={()=>setTab("pool")}>待办池</button>
-        <button style={S.tab(tab==="knowledge")} onClick={()=>setTab("knowledge")}>知识库</button>
-        <button style={S.tab(tab==="settings")}  onClick={()=>setTab("settings")}>设置</button>
-      </div>
-      {tab==="log"       && <LogTab data={data} save={save}/>}
-      {tab==="pool"      && <PoolTab data={data} save={save}/>}
-      {tab==="knowledge" && <KnowledgeTab data={data} save={save}/>}
-      {tab==="settings"  && <SettingsTab data={data} save={save}
-        ghToken={ghToken} setGhToken={setGhToken} ghGistId={ghGistId}
-        encPwd={encPwd} setEncPwd={setEncPwd} syncStatus={syncStatus}
-        syncMsg={syncMsg} lastSynced={lastSynced} isConfigured={isConfigured}
-        connecting={connecting} connectGist={connectGist}
-        connectExistingGist={connectExistingGist}
-        disconnectGist={disconnectGist} manualSync={manualSync}/>}
-      <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>数据加密同步至 GitHub Gist</div>
-    </div>
-  );
+return(
+<div style={S.app}>
+<div style={{textAlign:“center”,marginBottom:20}}>
+<div style={{fontSize:15,fontWeight:700,letterSpacing:1,color:”#111318”}}>WORK TRACKER</div>
+<div style={{fontSize:11,color:”#9ca3af”,marginTop:4,display:“flex”,alignItems:“center”,justifyContent:“center”,gap:6}}>
+记录 · 待办 · 知识库
+<span style={{display:“inline-flex”,alignItems:“center”,gap:3,color:syncColor}}>
+<span style={{width:6,height:6,borderRadius:“50%”,background:syncColor,display:“inline-block”}}/>
+{syncLabel}
+{lastSynced&&syncStatus===“synced”&&<span style={{color:”#9ca3af”}}>· {lastSynced}</span>}
+</span>
+</div>
+</div>
+<div style={S.tabs}>
+<button style={S.tab(tab===“log”)}       onClick={()=>setTab(“log”)}>每日记录</button>
+<button style={S.tab(tab===“pool”)}      onClick={()=>setTab(“pool”)}>待办池</button>
+<button style={S.tab(tab===“knowledge”)} onClick={()=>setTab(“knowledge”)}>知识库</button>
+<button style={S.tab(tab===“settings”)}  onClick={()=>setTab(“settings”)}>设置</button>
+</div>
+{tab===“log”       && <LogTab data={data} save={save}/>}
+{tab===“pool”      && <PoolTab data={data} save={save}/>}
+{tab===“knowledge” && <KnowledgeTab data={data} save={save}/>}
+{tab===“settings”  && <SettingsTab data={data} save={save}
+ghToken={ghToken} setGhToken={setGhToken} ghGistId={ghGistId}
+encPwd={encPwd} setEncPwd={setEncPwd} syncStatus={syncStatus}
+syncMsg={syncMsg} lastSynced={lastSynced} isConfigured={isConfigured}
+connecting={connecting} connectGist={connectGist}
+connectExistingGist={connectExistingGist}
+disconnectGist={disconnectGist} manualSync={manualSync}/>}
+<div style={{textAlign:“center”,padding:“12px 0 4px”,fontSize:11,color:”#d1d5db”}}>数据加密同步至 GitHub Gist</div>
+</div>
+);
 }
 
 // ── Log Tab ───────────────────────────────────────────────
 function LogTab({data,save}){
-  const [selDate,setSelDate]=useState(today());
-  const [name,setName]=useState("");
-  const [cat,setCat]=useState("core");
-  const [mins,setMins]=useState(30);
-  const [note,setNote]=useState("");
-  const [exportModal,setExportModal]=useState(false);
-  const [editEntry,setEditEntry]=useState(null);
-  const [dailyNote,setDailyNote]=useState("");
-  const [noteLoaded,setNoteLoaded]=useState("");
+const [selDate,setSelDate]=useState(today());
+const [name,setName]=useState(””);
+const [cat,setCat]=useState(“core”);
+const [mins,setMins]=useState(30);
+const [note,setNote]=useState(””);
+const [exportModal,setExportModal]=useState(false);
+const [editEntry,setEditEntry]=useState(null);
+const [dailyNote,setDailyNote]=useState(””);
+const [noteLoaded,setNoteLoaded]=useState(””);
 
-  const entries=data.logs[selDate]||[];
-  const totalMins=entries.reduce((s,t)=>s+t.mins,0);
-  const shiftDate=d=>{const dt=new Date(selDate);dt.setDate(dt.getDate()+d);setSelDate(dt.toISOString().slice(0,10));};
+const entries=data.logs[selDate]||[];
+const totalMins=entries.reduce((s,t)=>s+t.mins,0);
+const shiftDate=d=>{const dt=new Date(selDate);dt.setDate(dt.getDate()+d);setSelDate(dt.toISOString().slice(0,10));};
 
-  useEffect(()=>{
-    const note=data.dailyNotes?.[selDate]||"";
-    setDailyNote(note);setNoteLoaded(note);
-  },[selDate,data.dailyNotes]);
+useEffect(()=>{
+const note=data.dailyNotes?.[selDate]||””;
+setDailyNote(note);setNoteLoaded(note);
+},[selDate,data.dailyNotes]);
 
-  const saveDailyNote=()=>{
-    if(dailyNote===noteLoaded) return;
-    save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
-    setNoteLoaded(dailyNote);
-  };
+const saveDailyNote=()=>{
+if(dailyNote===noteLoaded) return;
+save({…data,dailyNotes:{…(data.dailyNotes||{}),[selDate]:dailyNote}});
+setNoteLoaded(dailyNote);
+};
 
-  const addTask=()=>{
-    if(!name.trim()) return;
-    const entry={id:Date.now(),name:name.trim(),cat,mins,note:note.trim(),createdAt:selDate};
-    save({...data,logs:{...data.logs,[selDate]:[...entries,entry]}});
-    setName("");setNote("");setMins(30);
-  };
+const addTask=()=>{
+if(!name.trim()) return;
+const entry={id:Date.now(),name:name.trim(),cat,mins,note:note.trim(),createdAt:selDate};
+save({…data,logs:{…data.logs,[selDate]:[…entries,entry]}});
+setName(””);setNote(””);setMins(30);
+};
 
-  const removeTask=id=>{
-    const newEntries=softDelete(data.logs[selDate]||[], id);
-    const newLogs={...data.logs,[selDate]:newEntries};
-    save({...data,logs:newLogs});
-  };
+const removeTask=id=>{
+const newEntries=softDelete(data.logs[selDate]||[], id);
+const newLogs={…data.logs,[selDate]:newEntries};
+save({…data,logs:newLogs});
+};
 
-  const saveEdit=()=>{
-    if(!editEntry) return;
-    const newLogs={...data.logs,[selDate]:(data.logs[selDate]||[]).map(t=>t.id===editEntry.id?{...editEntry,updatedAt:Date.now()}:t)};
-    save({...data,logs:newLogs});
-    setEditEntry(null);
-  };
+const saveEdit=()=>{
+if(!editEntry) return;
+const newLogs={…data.logs,[selDate]:(data.logs[selDate]||[]).map(t=>t.id===editEntry.id?{…editEntry,updatedAt:Date.now()}:t)};
+save({…data,logs:newLogs});
+setEditEntry(null);
+};
 
-  return(
-    <>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginBottom:16}}>
-        <button style={{...S.btnSm(),padding:"6px 14px"}} onClick={()=>shiftDate(-1)}>◀</button>
-        <span style={{fontSize:15,fontWeight:600,minWidth:90,textAlign:"center"}}>{selDate===today()?"今天":selDate}</span>
-        <button style={{...S.btnSm(),padding:"6px 14px"}} onClick={()=>shiftDate(1)}>▶</button>
-        {selDate!==today()&&<button style={S.btnSm("#2563eb")} onClick={()=>setSelDate(today())}>今天</button>}
+return(
+<>
+<div style={{display:“flex”,alignItems:“center”,justifyContent:“center”,gap:12,marginBottom:16}}>
+<button style={{…S.btnSm(),padding:“6px 14px”}} onClick={()=>shiftDate(-1)}>◀</button>
+<span style={{fontSize:15,fontWeight:600,minWidth:90,textAlign:“center”}}>{selDate===today()?“今天”:selDate}</span>
+<button style={{…S.btnSm(),padding:“6px 14px”}} onClick={()=>shiftDate(1)}>▶</button>
+{selDate!==today()&&<button style={S.btnSm(”#2563eb”)} onClick={()=>setSelDate(today())}>今天</button>}
+</div>
+
+```
+  <div style={S.card}>
+    <label style={S.label}>添加事项</label>
+    <input style={{...S.input,marginBottom:8}} placeholder="做了什么？" value={name}
+      onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&addTask()}/>
+    <div style={{...S.row,marginBottom:8}}>
+      <select style={{...S.select,flex:2}} value={cat} onChange={e=>setCat(e.target.value)}>
+        {CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+      </select>
+      <select style={{...S.select,flex:"0 0 88px"}} value={mins} onChange={e=>setMins(Number(e.target.value))}>
+        {[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{m>=60?`${m/60}h`:`${m}m`}</option>)}
+      </select>
+    </div>
+    <div style={{fontSize:11,color:"#9ca3af",marginBottom:8}}>{CATS.find(c=>c.key===cat)?.desc}</div>
+    <textarea style={{...S.textarea,marginBottom:8}} placeholder="备注：判断、遇到的问题、或任何想法…"
+      value={note} onChange={e=>setNote(e.target.value)}/>
+    <button style={S.btn()} onClick={addTask}>添加</button>
+  </div>
+
+  {entries.length>0&&(
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={S.label}>今日记录</span>
+        <span style={{fontSize:12,color:"#9ca3af"}}>{Math.floor(totalMins/60)}h{totalMins%60>0?`${totalMins%60}m`:""}</span>
+      </div>
+      <div style={{display:"flex",height:8,borderRadius:4,overflow:"hidden",marginBottom:12}}>
+        {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
+          return <div key={c.key} style={{background:c.color,width:`${(m/totalMins)*100}%`,minWidth:m>0?2:0,transition:"width .3s"}}/>;
+        })}
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+        {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
+          if(!m) return null;
+          return <span key={c.key} style={{fontSize:11,color:c.color}}>● {c.label} {Math.round((m/totalMins)*100)}%</span>;
+        })}
       </div>
 
-      <div style={S.card}>
-        <label style={S.label}>添加事项</label>
-        <input style={{...S.input,marginBottom:8}} placeholder="做了什么？" value={name}
-          onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&addTask()}/>
-        <div style={{...S.row,marginBottom:8}}>
-          <select style={{...S.select,flex:2}} value={cat} onChange={e=>setCat(e.target.value)}>
-            {CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
-          </select>
-          <select style={{...S.select,flex:"0 0 88px"}} value={mins} onChange={e=>setMins(Number(e.target.value))}>
-            {[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{m>=60?`${m/60}h`:`${m}m`}</option>)}
-          </select>
-        </div>
-        <div style={{fontSize:11,color:"#9ca3af",marginBottom:8}}>{CATS.find(c=>c.key===cat)?.desc}</div>
-        <textarea style={{...S.textarea,marginBottom:8}} placeholder="备注：判断、遇到的问题、或任何想法…"
-          value={note} onChange={e=>setNote(e.target.value)}/>
-        <button style={S.btn()} onClick={addTask}>添加</button>
-      </div>
-
-      {entries.length>0&&(
-        <div style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <span style={S.label}>今日记录</span>
-            <span style={{fontSize:12,color:"#9ca3af"}}>{Math.floor(totalMins/60)}h{totalMins%60>0?`${totalMins%60}m`:""}</span>
-          </div>
-          <div style={{display:"flex",height:8,borderRadius:4,overflow:"hidden",marginBottom:12}}>
-            {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
-              return <div key={c.key} style={{background:c.color,width:`${(m/totalMins)*100}%`,minWidth:m>0?2:0,transition:"width .3s"}}/>;
-            })}
-          </div>
-          <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap"}}>
-            {CATS.map(c=>{const m=entries.filter(t=>t.cat===c.key).reduce((s,t)=>s+t.mins,0);
-              if(!m) return null;
-              return <span key={c.key} style={{fontSize:11,color:c.color}}>● {c.label} {Math.round((m/totalMins)*100)}%</span>;
-            })}
-          </div>
-
-          {entries.map(t=>{
-            const catInfo=CATS.find(c=>c.key===t.cat);
-            const isEditing=editEntry?.id===t.id;
-            return(
-              <div key={t.id} style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6}}>
-                {isEditing?(
-                  <div>
-                    <input style={{...S.input,marginBottom:8}} value={editEntry.name}
-                      onChange={e=>setEditEntry({...editEntry,name:e.target.value})}/>
-                    <div style={{...S.row,marginBottom:8}}>
-                      <select style={{...S.select,flex:2}} value={editEntry.cat}
-                        onChange={e=>setEditEntry({...editEntry,cat:e.target.value})}>
-                        {CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
-                      </select>
-                      <select style={{...S.select,flex:"0 0 88px"}} value={editEntry.mins}
-                        onChange={e=>setEditEntry({...editEntry,mins:Number(e.target.value)})}>
-                        {[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{m>=60?`${m/60}h`:`${m}m`}</option>)}
-                      </select>
-                    </div>
-                    <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.note||""}
-                      onChange={e=>setEditEntry({...editEntry,note:e.target.value})}
-                      placeholder="备注"/>
-                    <div style={{display:"flex",gap:6}}>
-                      <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEdit}>保存</button>
-                      <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditEntry(null)}>取消</button>
-                    </div>
-                  </div>
-                ):(
-                  <div>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                      <div style={{display:"flex",alignItems:"center",flex:1,minWidth:0,gap:8}}>
-                        <span style={{width:8,height:8,borderRadius:"50%",background:catInfo?.color,flexShrink:0}}/>
-                        <span style={{fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</span>
-                      </div>
-                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                        <span style={{fontSize:11,color:"#9ca3af"}}>{fmtMins(t.mins)}</span>
-                        <button style={S.btnSm("#f59e0b")} onClick={()=>setEditEntry({...t})}>✎</button>
-                        <button style={S.btnSm("#dc2626")} onClick={()=>removeTask(t.id)}>删</button>
-                      </div>
-                    </div>
-                    {t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,paddingLeft:16,borderLeft:"2px solid #e5e7eb"}}>{t.note}</div>}
-                  </div>
-                )}
+      {entries.map(t=>{
+        const catInfo=CATS.find(c=>c.key===t.cat);
+        const isEditing=editEntry?.id===t.id;
+        return(
+          <div key={t.id} style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6}}>
+            {isEditing?(
+              <div>
+                <input style={{...S.input,marginBottom:8}} value={editEntry.name}
+                  onChange={e=>setEditEntry({...editEntry,name:e.target.value})}/>
+                <div style={{...S.row,marginBottom:8}}>
+                  <select style={{...S.select,flex:2}} value={editEntry.cat}
+                    onChange={e=>setEditEntry({...editEntry,cat:e.target.value})}>
+                    {CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                  </select>
+                  <select style={{...S.select,flex:"0 0 88px"}} value={editEntry.mins}
+                    onChange={e=>setEditEntry({...editEntry,mins:Number(e.target.value)})}>
+                    {[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{m>=60?`${m/60}h`:`${m}m`}</option>)}
+                  </select>
+                </div>
+                <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.note||""}
+                  onChange={e=>setEditEntry({...editEntry,note:e.target.value})}
+                  placeholder="备注"/>
+                <div style={{display:"flex",gap:6}}>
+                  <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEdit}>保存</button>
+                  <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditEntry(null)}>取消</button>
+                </div>
               </div>
-            );
-          })}
-          <button style={{...S.btn("#f9fafb","#374151"),marginTop:4,border:"1px solid #e5e7eb"}}
-            onClick={()=>setExportModal(true)}>↓ 导出数据</button>
-        </div>
-      )}
-      {exportModal&&<ExportModal data={data} defaultDate={selDate} onClose={()=>setExportModal(false)}/>}
-      <div style={S.card}>
-        <label style={S.label}>今日状态</label>
-        <textarea style={{...S.textarea,minHeight:72,color:"#6b7280"}} placeholder="今天状态怎样？有什么感受或想法…"
-          value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={saveDailyNote}/>
-        {dailyNote!==noteLoaded&&<div style={{fontSize:11,color:"#d97706",marginTop:4}}>未保存 · 点击外部自动保存</div>}
-      </div>
-    </>
-  );
+            ):(
+              <div>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",flex:1,minWidth:0,gap:8}}>
+                    <span style={{width:8,height:8,borderRadius:"50%",background:catInfo?.color,flexShrink:0}}/>
+                    <span style={{fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                    <span style={{fontSize:11,color:"#9ca3af"}}>{fmtMins(t.mins)}</span>
+                    <button style={S.btnSm("#f59e0b")} onClick={()=>setEditEntry({...t})}>✎</button>
+                    <button style={S.btnSm("#dc2626")} onClick={()=>removeTask(t.id)}>删</button>
+                  </div>
+                </div>
+                {t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,paddingLeft:16,borderLeft:"2px solid #e5e7eb"}}>{t.note}</div>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <button style={{...S.btn("#f9fafb","#374151"),marginTop:4,border:"1px solid #e5e7eb"}}
+        onClick={()=>setExportModal(true)}>↓ 导出数据</button>
+    </div>
+  )}
+  {exportModal&&<ExportModal data={data} defaultDate={selDate} onClose={()=>setExportModal(false)}/>}
+  <div style={S.card}>
+    <label style={S.label}>今日状态</label>
+    <textarea style={{...S.textarea,minHeight:72,color:"#6b7280"}} placeholder="今天状态怎样？有什么感受或想法…"
+      value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={saveDailyNote}/>
+    {dailyNote!==noteLoaded&&<div style={{fontSize:11,color:"#d97706",marginTop:4}}>未保存 · 点击外部自动保存</div>}
+  </div>
+</>
+```
+
+);
 }
 
 // ── Export Modal ──────────────────────────────────────────
 function ExportModal({data,defaultDate,onClose}){
-  const [mode,setMode]=useState("today");
-  const [from,setFrom]=useState(defaultDate);
-  const [to,setTo]=useState(today());
-  const [type,setType]=useState("plain");
-  const [encPwd,setEncPwd]=useState("");
-  const [msg,setMsg]=useState("");
+const [mode,setMode]=useState(“today”);
+const [from,setFrom]=useState(defaultDate);
+const [to,setTo]=useState(today());
+const [type,setType]=useState(“plain”);
+const [encPwd,setEncPwd]=useState(””);
+const [msg,setMsg]=useState(””);
 
-  const doExport=async()=>{
-    let logsToExport={};
-    if(mode==="today"){
-      logsToExport={[defaultDate]:data.logs[defaultDate]||[]};
-    } else {
-      Object.keys(data.logs).filter(d=>d>=from&&d<=to).forEach(d=>{logsToExport[d]=data.logs[d];});
-    }
-    const notesToExport=mode==="today"
-      ?{[defaultDate]:data.dailyNotes?.[defaultDate]||""}
-      :Object.fromEntries(Object.entries(data.dailyNotes||{}).filter(([d])=>d>=from&&d<=to));
-    const payload=JSON.stringify({logs:logsToExport,dailyNotes:notesToExport,pool:data.pool,knowledge:data.knowledge,exportedAt:new Date().toISOString()},null,2);
-    let content=payload;
-    let filename=`work-tracker-${mode==="today"?defaultDate:`${from}_${to}`}.json`;
-    if(type==="encrypted"){
-      if(!encPwd.trim()){setMsg("请填写加密密码");return;}
-      content=await encryptStr(payload,encPwd);
-      filename=filename.replace(".json",".enc.json");
-    }
-    const blob=new Blob([content],{type:"application/json"});
-    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;a.click();
-    onClose();
-  };
+const doExport=async()=>{
+let logsToExport={};
+if(mode===“today”){
+logsToExport={[defaultDate]:data.logs[defaultDate]||[]};
+} else {
+Object.keys(data.logs).filter(d=>d>=from&&d<=to).forEach(d=>{logsToExport[d]=data.logs[d];});
+}
+const notesToExport=mode===“today”
+?{[defaultDate]:data.dailyNotes?.[defaultDate]||””}
+:Object.fromEntries(Object.entries(data.dailyNotes||{}).filter(([d])=>d>=from&&d<=to));
+const payload=JSON.stringify({logs:logsToExport,dailyNotes:notesToExport,pool:data.pool,knowledge:data.knowledge,exportedAt:new Date().toISOString()},null,2);
+let content=payload;
+let filename=`work-tracker-${mode==="today"?defaultDate:`${from}_${to}`}.json`;
+if(type===“encrypted”){
+if(!encPwd.trim()){setMsg(“请填写加密密码”);return;}
+content=await encryptStr(payload,encPwd);
+filename=filename.replace(”.json”,”.enc.json”);
+}
+const blob=new Blob([content],{type:“application/json”});
+const a=document.createElement(“a”);a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+onClose();
+};
 
-  return(
-    <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={S.modalBox}>
-        <div style={{fontWeight:600,fontSize:15,marginBottom:16}}>导出数据</div>
-        <label style={S.label}>导出范围</label>
-        <div style={{display:"flex",gap:8,marginBottom:12}}>
-          <button style={{...S.btn(mode==="today"?"#2563eb":"#f9fafb",mode==="today"?"#fff":"#374151"),flex:1}} onClick={()=>setMode("today")}>今天</button>
-          <button style={{...S.btn(mode==="range"?"#2563eb":"#f9fafb",mode==="range"?"#fff":"#374151"),flex:1}} onClick={()=>setMode("range")}>指定范围</button>
-        </div>
-        {mode==="range"&&(
-          <div style={{...S.row,marginBottom:12}}>
-            <div style={{flex:1}}><label style={S.label}>从</label><input type="date" style={S.input} value={from} onChange={e=>setFrom(e.target.value)}/></div>
-            <div style={{flex:1}}><label style={S.label}>到</label><input type="date" style={S.input} value={to} onChange={e=>setTo(e.target.value)}/></div>
-          </div>
-        )}
-        <label style={S.label}>导出类型</label>
-        <div style={{display:"flex",gap:8,marginBottom:4}}>
-          <button style={{...S.btn(type==="plain"?"#2563eb":"#f9fafb",type==="plain"?"#fff":"#374151"),flex:1}} onClick={()=>setType("plain")}>明文（发给AI分析）</button>
-          <button style={{...S.btn(type==="encrypted"?"#2563eb":"#f9fafb",type==="encrypted"?"#fff":"#374151"),flex:1}} onClick={()=>setType("encrypted")}>加密（本地备份）</button>
-        </div>
-        {type==="plain"&&<div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>明文文件可上传给 Claude 进行分析提炼</div>}
-        {type==="encrypted"&&(
-          <div style={{marginBottom:12}}>
-            <div style={{fontSize:11,color:"#9ca3af",marginBottom:6}}>加密备份只有你自己能解密</div>
-            <input style={S.input} type="password" placeholder="加密密码" value={encPwd} onChange={e=>setEncPwd(e.target.value)}/>
-          </div>
-        )}
-        {msg&&<div style={{fontSize:12,color:"#dc2626",marginBottom:8}}>{msg}</div>}
-        <div style={{display:"flex",gap:8}}>
-          <button style={{...S.btn(),flex:1}} onClick={doExport}>导出</button>
-          <button style={{...S.btn("#f9fafb","#374151"),flex:1}} onClick={onClose}>取消</button>
-        </div>
-      </div>
-    </div>
-  );
+return(
+<div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}>
+<div style={S.modalBox}>
+<div style={{fontWeight:600,fontSize:15,marginBottom:16}}>导出数据</div>
+<label style={S.label}>导出范围</label>
+<div style={{display:“flex”,gap:8,marginBottom:12}}>
+<button style={{…S.btn(mode===“today”?”#2563eb”:”#f9fafb”,mode===“today”?”#fff”:”#374151”),flex:1}} onClick={()=>setMode(“today”)}>今天</button>
+<button style={{…S.btn(mode===“range”?”#2563eb”:”#f9fafb”,mode===“range”?”#fff”:”#374151”),flex:1}} onClick={()=>setMode(“range”)}>指定范围</button>
+</div>
+{mode===“range”&&(
+<div style={{...S.row,marginBottom:12}}>
+<div style={{flex:1}}><label style={S.label}>从</label><input type=“date” style={S.input} value={from} onChange={e=>setFrom(e.target.value)}/></div>
+<div style={{flex:1}}><label style={S.label}>到</label><input type=“date” style={S.input} value={to} onChange={e=>setTo(e.target.value)}/></div>
+</div>
+)}
+<label style={S.label}>导出类型</label>
+<div style={{display:“flex”,gap:8,marginBottom:4}}>
+<button style={{…S.btn(type===“plain”?”#2563eb”:”#f9fafb”,type===“plain”?”#fff”:”#374151”),flex:1}} onClick={()=>setType(“plain”)}>明文（发给AI分析）</button>
+<button style={{…S.btn(type===“encrypted”?”#2563eb”:”#f9fafb”,type===“encrypted”?”#fff”:”#374151”),flex:1}} onClick={()=>setType(“encrypted”)}>加密（本地备份）</button>
+</div>
+{type===“plain”&&<div style={{fontSize:11,color:”#9ca3af”,marginBottom:12}}>明文文件可上传给 Claude 进行分析提炼</div>}
+{type===“encrypted”&&(
+<div style={{marginBottom:12}}>
+<div style={{fontSize:11,color:”#9ca3af”,marginBottom:6}}>加密备份只有你自己能解密</div>
+<input style={S.input} type=“password” placeholder=“加密密码” value={encPwd} onChange={e=>setEncPwd(e.target.value)}/>
+</div>
+)}
+{msg&&<div style={{fontSize:12,color:”#dc2626”,marginBottom:8}}>{msg}</div>}
+<div style={{display:“flex”,gap:8}}>
+<button style={{...S.btn(),flex:1}} onClick={doExport}>导出</button>
+<button style={{…S.btn(”#f9fafb”,”#374151”),flex:1}} onClick={onClose}>取消</button>
+</div>
+</div>
+</div>
+);
 }
 
 // ── Pool Tab ──────────────────────────────────────────────
 function PoolTab({data,save}){
-  const [view,setView]=useState("group");
-  const [itemName,setItemName]=useState("");
-  const [itemProj,setItemProj]=useState("");
-  const [itemValue,setItemValue]=useState(1);
-  const [itemUrgency,setItemUrgency]=useState(1);
-  const [itemDeadline,setItemDeadline]=useState("");
-  const [newProjName,setNewProjName]=useState("");
-  const [showNewProj,setShowNewProj]=useState(false);
-  const [editItem,setEditItem]=useState(null);
-  const [editProjId,setEditProjId]=useState(null);
-  const [editProjName,setEditProjName]=useState("");
+const [view,setView]=useState(“group”);
+const [itemName,setItemName]=useState(””);
+const [itemProj,setItemProj]=useState(””);
+const [itemValue,setItemValue]=useState(1);
+const [itemUrgency,setItemUrgency]=useState(1);
+const [itemDeadline,setItemDeadline]=useState(””);
+const [newProjName,setNewProjName]=useState(””);
+const [showNewProj,setShowNewProj]=useState(false);
+const [editItem,setEditItem]=useState(null);
+const [editProjId,setEditProjId]=useState(null);
+const [editProjName,setEditProjName]=useState(””);
 
-  const projects=data.pool?.projects||[];
-  const items=data.pool?.items||[];
-  const activeItems=items.filter(i=>!i.done);
-  const doneItems=items.filter(i=>i.done);
-  const savePool=p=>save({...data,pool:p});
+const projects=data.pool?.projects||[];
+const items=data.pool?.items||[];
+const activeItems=items.filter(i=>!i.done);
+const doneItems=items.filter(i=>i.done);
+const savePool=p=>save({…data,pool:p});
 
-  const addProjectInline=()=>{
-    if(!newProjName.trim()) return;
-    const p={id:Date.now(),name:newProjName.trim(),status:"active"};
-    const newProjects=[...projects,p];
-    savePool({...data.pool,projects:newProjects});
-    setItemProj(String(p.id));
-    setNewProjName("");setShowNewProj(false);
-    return p.id;
-  };
+const addProjectInline=()=>{
+if(!newProjName.trim()) return;
+const p={id:Date.now(),name:newProjName.trim(),status:“active”};
+const newProjects=[…projects,p];
+savePool({…data.pool,projects:newProjects});
+setItemProj(String(p.id));
+setNewProjName(””);setShowNewProj(false);
+return p.id;
+};
 
-  const addItem=()=>{
-    if(!itemName.trim()) return;
-    const it={id:Date.now(),name:itemName.trim(),projectId:itemProj||null,
-      value:itemValue,urgency:itemUrgency,deadline:itemDeadline||null,
-      blocked:false,done:false,created:today()};
-    savePool({...data.pool,items:[...items,it]});
-    setItemName("");setItemProj("");setItemValue(1);setItemUrgency(1);setItemDeadline("");
-  };
+const addItem=()=>{
+if(!itemName.trim()) return;
+const it={id:Date.now(),name:itemName.trim(),projectId:itemProj||null,
+value:itemValue,urgency:itemUrgency,deadline:itemDeadline||null,
+blocked:false,done:false,created:today()};
+savePool({…data.pool,items:[…items,it]});
+setItemName(””);setItemProj(””);setItemValue(1);setItemUrgency(1);setItemDeadline(””);
+};
 
-  const toggleDone=id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,done:!i.done,updatedAt:Date.now()}:i)});
-  const toggleBlocked=id=>savePool({...data.pool,items:items.map(i=>i.id===id?{...i,blocked:!i.blocked,updatedAt:Date.now()}:i)});
-  const removeItem=id=>savePool({...data.pool,items:softDelete(items,id)});
-  const removeProject=id=>savePool({projects:softDelete(projects,id),items:items.map(i=>i.projectId===id?{...i,projectId:null,updatedAt:Date.now()}:i)});
-  const toggleProjStatus=id=>savePool({...data.pool,projects:projects.map(p=>p.id===id?{...p,status:p.status==="active"?"blocked":"active",updatedAt:Date.now()}:p)});
-  const saveItemEdit=()=>{
-    if(!editItem) return;
-    savePool({...data.pool,items:items.map(i=>i.id===editItem.id?{...editItem,updatedAt:Date.now()}:i)});
-    setEditItem(null);
-  };
-  const saveProjEdit=()=>{
-    if(!editProjName.trim()) return;
-    savePool({...data.pool,projects:projects.map(p=>p.id===editProjId?{...p,name:editProjName.trim(),updatedAt:Date.now()}:p)});
-    setEditProjId(null);setEditProjName("");
-  };
+const toggleDone=id=>savePool({…data.pool,items:items.map(i=>i.id===id?{…i,done:!i.done,updatedAt:Date.now()}:i)});
+const toggleBlocked=id=>savePool({…data.pool,items:items.map(i=>i.id===id?{…i,blocked:!i.blocked,updatedAt:Date.now()}:i)});
+const removeItem=id=>savePool({…data.pool,items:softDelete(items,id)});
+const removeProject=id=>savePool({projects:softDelete(projects,id),items:items.map(i=>i.projectId===id?{…i,projectId:null,updatedAt:Date.now()}:i)});
+const toggleProjStatus=id=>savePool({…data.pool,projects:projects.map(p=>p.id===id?{…p,status:p.status===“active”?“blocked”:“active”,updatedAt:Date.now()}:p)});
+const saveItemEdit=()=>{
+if(!editItem) return;
+savePool({…data.pool,items:items.map(i=>i.id===editItem.id?{…editItem,updatedAt:Date.now()}:i)});
+setEditItem(null);
+};
+const saveProjEdit=()=>{
+if(!editProjName.trim()) return;
+savePool({…data.pool,projects:projects.map(p=>p.id===editProjId?{…p,name:editProjName.trim(),updatedAt:Date.now()}:p)});
+setEditProjId(null);setEditProjName(””);
+};
 
-  const sortedItems=[...activeItems].sort((a,b)=>(b.value*3+b.urgency)-(a.value*3+a.urgency));
+const sortedItems=[…activeItems].sort((a,b)=>(b.value*3+b.urgency)-(a.value*3+a.urgency));
 
-  const ItemCard=({item,dimmed})=>{
-    const proj=projects.find(p=>p.id==item.projectId);
-    const days=item.deadline?Math.ceil((new Date(item.deadline)-new Date())/86400000):null;
-    return(
-      <div style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6,opacity:dimmed?0.45:1}}>
-        {editItem?.id===item.id?(
-          <div>
-            <input style={{...S.input,marginBottom:8}} value={editItem.name}
-              onChange={e=>setEditItem({...editItem,name:e.target.value})}
-              onKeyDown={e=>e.key==="Enter"&&saveItemEdit()}/>
-            <div style={{...S.row,marginBottom:8}}>
-              <select style={{...S.select,flex:2}} value={editItem.projectId||""}
-                onChange={e=>setEditItem({...editItem,projectId:e.target.value||null})}>
-                <option value="">无归属项目</option>
-                {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input type="date" style={{...S.select,flex:"0 0 140px"}} value={editItem.deadline||""}
-                onChange={e=>setEditItem({...editItem,deadline:e.target.value||null})}/>
-            </div>
-            <div style={{...S.row,marginBottom:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>价值</div>
-                <div style={{display:"flex",gap:4}}>
-                  {VALUE.map((v,i)=><button key={i} style={{...S.btnSm(editItem.value===i?"#2563eb":undefined),flex:1}} onClick={()=>setEditItem({...editItem,value:i})}>{v}</button>)}
-                </div>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>紧急</div>
-                <div style={{display:"flex",gap:4}}>
-                  {URGENCY.map((u,i)=><button key={i} style={{...S.btnSm(editItem.urgency===i?"#d97706":undefined),flex:1}} onClick={()=>setEditItem({...editItem,urgency:i})}>{u}</button>)}
-                </div>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:6}}>
-              <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveItemEdit}>保存</button>
-              <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditItem(null)}>取消</button>
-            </div>
-          </div>
-        ):(
-          <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:13,marginBottom:4,textDecoration:dimmed?"line-through":"none"}}>{item.name}</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
-                  <span style={S.badge(item.value===2?"#2563eb":item.value===1?"#4b5563":"#9ca3af")}>{VALUE[item.value]}价值</span>
-                  <span style={S.badge(item.urgency===2?"#dc2626":item.urgency===1?"#d97706":"#9ca3af")}>{URGENCY[item.urgency]}</span>
-                  {proj&&<span style={{fontSize:10,color:"#6b7280",background:"#f3f4f6",padding:"2px 6px",borderRadius:4}}>{proj.name}</span>}
-                  {days!==null&&<span style={{fontSize:11,color:days<0?"#dc2626":days===0?"#d97706":days<=7?"#d97706":"#6b7280"}}>{days<0?"已过期":days===0?"今日截止":`${days}天后截止`}</span>}
-                  {item.blocked&&<span style={{fontSize:11,color:"#9ca3af"}}>搁置中</span>}
-                </div>
-              </div>
-              {!dimmed&&(
-                <div style={{display:"flex",gap:4,flexShrink:0,marginLeft:8}}>
-                  <button style={S.btnSm("#f59e0b")} onClick={()=>setEditItem({...item})}>✎</button>
-                  <button style={S.btnSm(item.blocked?"#6b7280":"#e5e7eb",item.blocked?"#fff":"#374151")} onClick={()=>toggleBlocked(item.id)}>{item.blocked?"取消搁置":"搁置"}</button>
-                  <button style={S.btnSm("#059669")} onClick={()=>toggleDone(item.id)}>✓</button>
-                  <button style={S.btnSm("#dc2626")} onClick={()=>removeItem(item.id)}>✕</button>
-                </div>
-              )}
-              {dimmed&&(
-                <div style={{display:"flex",gap:4,flexShrink:0,marginLeft:8}}>
-                  <button style={S.btnSm()} onClick={()=>toggleDone(item.id)}>恢复</button>
-                  <button style={S.btnSm("#dc2626")} onClick={()=>removeItem(item.id)}>删</button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+const ItemCard=({item,dimmed})=>{
+const proj=projects.find(p=>p.id==item.projectId);
+const days=item.deadline?Math.ceil((new Date(item.deadline)-new Date())/86400000):null;
+return(
+<div style={{padding:“10px 12px”,background:”#f9fafb”,borderRadius:8,marginBottom:6,opacity:dimmed?0.45:1}}>
+{editItem?.id===item.id?(
+<div>
+<input style={{…S.input,marginBottom:8}} value={editItem.name}
+onChange={e=>setEditItem({…editItem,name:e.target.value})}
+onKeyDown={e=>e.key===“Enter”&&saveItemEdit()}/>
+<div style={{...S.row,marginBottom:8}}>
+<select style={{…S.select,flex:2}} value={editItem.projectId||””}
+onChange={e=>setEditItem({…editItem,projectId:e.target.value||null})}>
+<option value="">无归属项目</option>
+{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+</select>
+<input type=“date” style={{…S.select,flex:“0 0 140px”}} value={editItem.deadline||””}
+onChange={e=>setEditItem({…editItem,deadline:e.target.value||null})}/>
+</div>
+<div style={{...S.row,marginBottom:8}}>
+<div style={{flex:1}}>
+<div style={{fontSize:11,color:”#9ca3af”,marginBottom:4}}>价值</div>
+<div style={{display:“flex”,gap:4}}>
+{VALUE.map((v,i)=><button key={i} style={{…S.btnSm(editItem.value===i?”#2563eb”:undefined),flex:1}} onClick={()=>setEditItem({…editItem,value:i})}>{v}</button>)}
+</div>
+</div>
+<div style={{flex:1}}>
+<div style={{fontSize:11,color:”#9ca3af”,marginBottom:4}}>紧急</div>
+<div style={{display:“flex”,gap:4}}>
+{URGENCY.map((u,i)=><button key={i} style={{…S.btnSm(editItem.urgency===i?”#d97706”:undefined),flex:1}} onClick={()=>setEditItem({…editItem,urgency:i})}>{u}</button>)}
+</div>
+</div>
+</div>
+<div style={{display:“flex”,gap:6}}>
+<button style={{…S.btn(),flex:1,padding:“7px 0”}} onClick={saveItemEdit}>保存</button>
+<button style={{…S.btn(”#f9fafb”,”#374151”),flex:1,padding:“7px 0”}} onClick={()=>setEditItem(null)}>取消</button>
+</div>
+</div>
+):(
+<div>
+<div style={{display:“flex”,justifyContent:“space-between”,alignItems:“flex-start”}}>
+<div style={{flex:1}}>
+<div style={{fontSize:13,marginBottom:4,textDecoration:dimmed?“line-through”:“none”}}>{item.name}</div>
+<div style={{display:“flex”,flexWrap:“wrap”,gap:4,alignItems:“center”}}>
+<span style={S.badge(item.value===2?”#2563eb”:item.value===1?”#4b5563”:”#9ca3af”)}>{VALUE[item.value]}价值</span>
+<span style={S.badge(item.urgency===2?”#dc2626”:item.urgency===1?”#d97706”:”#9ca3af”)}>{URGENCY[item.urgency]}</span>
+{proj&&<span style={{fontSize:10,color:”#6b7280”,background:”#f3f4f6”,padding:“2px 6px”,borderRadius:4}}>{proj.name}</span>}
+{days!==null&&<span style={{fontSize:11,color:days<0?”#dc2626”:days===0?”#d97706”:days<=7?”#d97706”:”#6b7280”}}>{days<0?“已过期”:days===0?“今日截止”:`${days}天后截止`}</span>}
+{item.blocked&&<span style={{fontSize:11,color:”#9ca3af”}}>搁置中</span>}
+</div>
+</div>
+{!dimmed&&(
+<div style={{display:“flex”,gap:4,flexShrink:0,marginLeft:8}}>
+<button style={S.btnSm(”#f59e0b”)} onClick={()=>setEditItem({…item})}>✎</button>
+<button style={S.btnSm(item.blocked?”#6b7280”:”#e5e7eb”,item.blocked?”#fff”:”#374151”)} onClick={()=>toggleBlocked(item.id)}>{item.blocked?“取消搁置”:“搁置”}</button>
+<button style={S.btnSm(”#059669”)} onClick={()=>toggleDone(item.id)}>✓</button>
+<button style={S.btnSm(”#dc2626”)} onClick={()=>removeItem(item.id)}>✕</button>
+</div>
+)}
+{dimmed&&(
+<div style={{display:“flex”,gap:4,flexShrink:0,marginLeft:8}}>
+<button style={S.btnSm()} onClick={()=>toggleDone(item.id)}>恢复</button>
+<button style={S.btnSm(”#dc2626”)} onClick={()=>removeItem(item.id)}>删</button>
+</div>
+)}
+</div>
+</div>
+)}
+</div>
+);
+};
+
+return(
+<>
+{/* Projects */}
+<div style={S.card}>
+<label style={S.label}>项目 ({projects.length})</label>
+{projects.map(p=>(
+<div key={p.id} style={{marginBottom:6}}>
+{editProjId===p.id?(
+<div style={{display:“flex”,gap:6}}>
+<input style={{…S.input,flex:1}} value={editProjName}
+onChange={e=>setEditProjName(e.target.value)}
+onKeyDown={e=>e.key===“Enter”&&saveProjEdit()}/>
+<button style={{…S.btnSm(”#059669”),padding:“8px 12px”}} onClick={saveProjEdit}>✓</button>
+<button style={{…S.btnSm(),padding:“8px 12px”}} onClick={()=>setEditProjId(null)}>✕</button>
+</div>
+):(
+<div style={{display:“flex”,alignItems:“center”,justifyContent:“space-between”,padding:“8px 10px”,
+background:p.status===“blocked”?”#fafafa”:”#f0f9ff”,borderRadius:8,opacity:p.status===“blocked”?0.6:1}}>
+<span style={{fontSize:13,color:p.status===“blocked”?”#9ca3af”:”#1a1d27”}}>{p.name}</span>
+<div style={{display:“flex”,gap:4}}>
+<button style={S.btnSm(”#f59e0b”)} onClick={()=>{setEditProjId(p.id);setEditProjName(p.name);}}>✎</button>
+<button style={S.btnSm(p.status===“blocked”?”#059669”:”#e5e7eb”,p.status===“blocked”?”#fff”:”#374151”)}
+onClick={()=>toggleProjStatus(p.id)}>{p.status===“blocked”?“激活”:“搁置”}</button>
+<button style={S.btnSm(”#dc2626”)} onClick={()=>removeProject(p.id)}>删</button>
+</div>
+</div>
+)}
+</div>
+))}
+</div>
+
+```
+  {/* Add Item */}
+  <div style={S.card}>
+    <label style={S.label}>新增事项</label>
+    <input style={{...S.input,marginBottom:8}} placeholder="待办事项（回车快速添加）" value={itemName}
+      onChange={e=>setItemName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
+    <div style={{...S.row,marginBottom:8}}>
+      <select style={{...S.select,flex:2}} value={itemProj} onChange={e=>{
+        if(e.target.value==="__new__"){setShowNewProj(true);}
+        else setItemProj(e.target.value);
+      }}>
+        <option value="">无归属项目</option>
+        {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        <option value="__new__">＋ 新建项目…</option>
+      </select>
+      <input type="date" style={{...S.select,flex:"0 0 140px"}} value={itemDeadline}
+        onChange={e=>setItemDeadline(e.target.value)}/>
+    </div>
+    {showNewProj&&(
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        <input style={{...S.input,flex:1}} placeholder="新项目名称" value={newProjName}
+          onChange={e=>setNewProjName(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&addProjectInline()}/>
+        <button style={{...S.btnSm("#059669"),padding:"8px 12px"}} onClick={addProjectInline}>✓</button>
+        <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>{setShowNewProj(false);setNewProjName("");}}>✕</button>
       </div>
-    );
-  };
-
-  return(
-    <>
-      {/* Projects */}
-      <div style={S.card}>
-        <label style={S.label}>项目 ({projects.length})</label>
-        {projects.map(p=>(
-          <div key={p.id} style={{marginBottom:6}}>
-            {editProjId===p.id?(
-              <div style={{display:"flex",gap:6}}>
-                <input style={{...S.input,flex:1}} value={editProjName}
-                  onChange={e=>setEditProjName(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&saveProjEdit()}/>
-                <button style={{...S.btnSm("#059669"),padding:"8px 12px"}} onClick={saveProjEdit}>✓</button>
-                <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>setEditProjId(null)}>✕</button>
-              </div>
-            ):(
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",
-                background:p.status==="blocked"?"#fafafa":"#f0f9ff",borderRadius:8,opacity:p.status==="blocked"?0.6:1}}>
-                <span style={{fontSize:13,color:p.status==="blocked"?"#9ca3af":"#1a1d27"}}>{p.name}</span>
-                <div style={{display:"flex",gap:4}}>
-                  <button style={S.btnSm("#f59e0b")} onClick={()=>{setEditProjId(p.id);setEditProjName(p.name);}}>✎</button>
-                  <button style={S.btnSm(p.status==="blocked"?"#059669":"#e5e7eb",p.status==="blocked"?"#fff":"#374151")}
-                    onClick={()=>toggleProjStatus(p.id)}>{p.status==="blocked"?"激活":"搁置"}</button>
-                  <button style={S.btnSm("#dc2626")} onClick={()=>removeProject(p.id)}>删</button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
+    )}
+    <div style={{...S.row,marginBottom:10}}>
+      <div style={{flex:1}}>
+        <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>价值</div>
+        <div style={{display:"flex",gap:4}}>
+          {VALUE.map((v,i)=><button key={i} style={{...S.btnSm(itemValue===i?"#2563eb":undefined),flex:1}} onClick={()=>setItemValue(i)}>{v}</button>)}
+        </div>
       </div>
-
-      {/* Add Item */}
-      <div style={S.card}>
-        <label style={S.label}>新增事项</label>
-        <input style={{...S.input,marginBottom:8}} placeholder="待办事项（回车快速添加）" value={itemName}
-          onChange={e=>setItemName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
-        <div style={{...S.row,marginBottom:8}}>
-          <select style={{...S.select,flex:2}} value={itemProj} onChange={e=>{
-            if(e.target.value==="__new__"){setShowNewProj(true);}
-            else setItemProj(e.target.value);
-          }}>
-            <option value="">无归属项目</option>
-            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-            <option value="__new__">＋ 新建项目…</option>
-          </select>
-          <input type="date" style={{...S.select,flex:"0 0 140px"}} value={itemDeadline}
-            onChange={e=>setItemDeadline(e.target.value)}/>
+      <div style={{flex:1}}>
+        <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>紧急</div>
+        <div style={{display:"flex",gap:4}}>
+          {URGENCY.map((u,i)=><button key={i} style={{...S.btnSm(itemUrgency===i?"#d97706":undefined),flex:1}} onClick={()=>setItemUrgency(i)}>{u}</button>)}
         </div>
-        {showNewProj&&(
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            <input style={{...S.input,flex:1}} placeholder="新项目名称" value={newProjName}
-              onChange={e=>setNewProjName(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&addProjectInline()}/>
-            <button style={{...S.btnSm("#059669"),padding:"8px 12px"}} onClick={addProjectInline}>✓</button>
-            <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>{setShowNewProj(false);setNewProjName("");}}>✕</button>
-          </div>
-        )}
-        <div style={{...S.row,marginBottom:10}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>价值</div>
-            <div style={{display:"flex",gap:4}}>
-              {VALUE.map((v,i)=><button key={i} style={{...S.btnSm(itemValue===i?"#2563eb":undefined),flex:1}} onClick={()=>setItemValue(i)}>{v}</button>)}
-            </div>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>紧急</div>
-            <div style={{display:"flex",gap:4}}>
-              {URGENCY.map((u,i)=><button key={i} style={{...S.btnSm(itemUrgency===i?"#d97706":undefined),flex:1}} onClick={()=>setItemUrgency(i)}>{u}</button>)}
-            </div>
-          </div>
-        </div>
-        <button style={S.btn()} onClick={addItem}>加入待办池</button>
       </div>
+    </div>
+    <button style={S.btn()} onClick={addItem}>加入待办池</button>
+  </div>
 
-      {/* Item List */}
-      <div style={S.card}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <label style={{...S.label,marginBottom:0}}>待办 ({activeItems.length})</label>
-          <div style={{display:"flex",gap:6}}>
-            <button style={S.btnSm(view==="flat"?"#2563eb":undefined)} onClick={()=>setView("flat")}>平铺</button>
-            <button style={S.btnSm(view==="group"?"#2563eb":undefined)} onClick={()=>setView("group")}>按项目</button>
-          </div>
-        </div>
-        {view==="flat"&&(
-          sortedItems.length===0
-            ?<div style={{textAlign:"center",color:"#9ca3af",padding:24}}>暂无待办事项</div>
-            :sortedItems.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)
-        )}
-        {view==="group"&&(
-          [...projects,{id:null,name:"未归属事项"}].map(proj=>{
-            const its=sortedItems.filter(i=>(proj.id===null?!i.projectId:i.projectId==proj.id));
-            if(!its.length) return null;
-            return(
-              <div key={proj.id||"none"} style={{marginBottom:12}}>
-                <div style={{fontSize:15,fontWeight:700,color:"#1a1d27",marginBottom:8,paddingBottom:6,borderBottom:"2px solid #e5e7eb"}}>{proj.name}</div>
-                {its.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)}
-              </div>
-            );
-          })
-        )}
+  {/* Item List */}
+  <div style={S.card}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      <label style={{...S.label,marginBottom:0}}>待办 ({activeItems.length})</label>
+      <div style={{display:"flex",gap:6}}>
+        <button style={S.btnSm(view==="flat"?"#2563eb":undefined)} onClick={()=>setView("flat")}>平铺</button>
+        <button style={S.btnSm(view==="group"?"#2563eb":undefined)} onClick={()=>setView("group")}>按项目</button>
       </div>
+    </div>
+    {view==="flat"&&(
+      sortedItems.length===0
+        ?<div style={{textAlign:"center",color:"#9ca3af",padding:24}}>暂无待办事项</div>
+        :sortedItems.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)
+    )}
+    {view==="group"&&(
+      [...projects,{id:null,name:"未归属事项"}].map(proj=>{
+        const its=sortedItems.filter(i=>(proj.id===null?!i.projectId:i.projectId==proj.id));
+        if(!its.length) return null;
+        return(
+          <div key={proj.id||"none"} style={{marginBottom:12}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#1a1d27",marginBottom:8,paddingBottom:6,borderBottom:"2px solid #e5e7eb"}}>{proj.name}</div>
+            {its.map(item=><ItemCard key={item.id} item={item} dimmed={item.blocked}/>)}
+          </div>
+        );
+      })
+    )}
+  </div>
 
-      {doneItems.length>0&&(
-        <div style={S.card}>
-          <label style={S.label}>已完成 ({doneItems.length})</label>
-          {doneItems.map(item=><ItemCard key={item.id} item={item} dimmed={true}/>)}
-        </div>
-      )}
-    </>
-  );
+  {doneItems.length>0&&(
+    <div style={S.card}>
+      <label style={S.label}>已完成 ({doneItems.length})</label>
+      {doneItems.map(item=><ItemCard key={item.id} item={item} dimmed={true}/>)}
+    </div>
+  )}
+</>
+```
+
+);
 }
 
 // ── Knowledge Tab ─────────────────────────────────────────
 function renderMd(text){
-  if(!text) return null;
-  const lines=text.split('\n');
-  const out=[];let i=0;
-  while(i<lines.length){
-    const line=lines[i];
-    if(line.trimStart().startsWith('```')){
-      const codeLines=[];i++;
-      while(i<lines.length&&!lines[i].trimStart().startsWith('```')){codeLines.push(lines[i]);i++;}
-      out.push(<pre key={i} style={{background:"#f3f4f6",borderRadius:6,padding:"10px 12px",fontSize:12,overflowX:"auto",margin:"6px 0",fontFamily:"'Menlo','Consolas',monospace",color:"#1a1d27",lineHeight:1.6}}><code>{codeLines.join('\n')}</code></pre>);
-      i++;continue;
-    }
-    const h1=line.match(/^#\s+(.*)/),h2=line.match(/^##\s+(.*)/),h3=line.match(/^###\s+(.*)/);
-    if(h3){out.push(<div key={i} style={{fontWeight:600,fontSize:13,margin:"6px 0 2px",color:"#374151"}}>{inlineMd(h3[1])}</div>);i++;continue;}
-    if(h2){out.push(<div key={i} style={{fontWeight:700,fontSize:14,margin:"8px 0 4px",color:"#1a1d27"}}>{inlineMd(h2[1])}</div>);i++;continue;}
-    if(h1){out.push(<div key={i} style={{fontWeight:700,fontSize:15,margin:"10px 0 4px",color:"#111318"}}>{inlineMd(h1[1])}</div>);i++;continue;}
-    const li=line.match(/^[-*]\s+(.*)/);
-    if(li){
-      const items=[li[1]];i++;
-      while(i<lines.length&&lines[i].match(/^[-*]\s+(.*)/)){items.push(lines[i].match(/^[-*]\s+(.*)/)[1]);i++;}
-      out.push(<ul key={i} style={{margin:"4px 0 4px 16px",padding:0,listStyle:"disc"}}>{items.map((it,j)=><li key={j} style={{fontSize:13,color:"#374151",lineHeight:1.7}}>{inlineMd(it)}</li>)}</ul>);
-      continue;
-    }
-    if(line.trim()===""){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
-    out.push(<div key={i} style={{fontSize:13,color:"#374151",lineHeight:1.7,margin:"2px 0"}}>{inlineMd(line)}</div>);
-    i++;
-  }
-  return out;
+if(!text) return null;
+const lines=text.split(’\n’);
+const out=[];let i=0;
+while(i<lines.length){
+const line=lines[i];
+if(line.trimStart().startsWith(’`')){ const codeLines=[];i++; while(i<lines.length&&!lines[i].trimStart().startsWith('`’)){codeLines.push(lines[i]);i++;}
+out.push(<pre key={i} style={{background:”#f3f4f6”,borderRadius:6,padding:“10px 12px”,fontSize:12,overflowX:“auto”,margin:“6px 0”,fontFamily:”‘Menlo’,‘Consolas’,monospace”,color:”#1a1d27”,lineHeight:1.6}}><code>{codeLines.join(’\n’)}</code></pre>);
+i++;continue;
+}
+const h1=line.match(/^#\s+(.*)/),h2=line.match(/^##\s+(.*)/),h3=line.match(/^###\s+(.*)/);
+if(h3){out.push(<div key={i} style={{fontWeight:600,fontSize:13,margin:“6px 0 2px”,color:”#374151”}}>{inlineMd(h3[1])}</div>);i++;continue;}
+if(h2){out.push(<div key={i} style={{fontWeight:700,fontSize:14,margin:“8px 0 4px”,color:”#1a1d27”}}>{inlineMd(h2[1])}</div>);i++;continue;}
+if(h1){out.push(<div key={i} style={{fontWeight:700,fontSize:15,margin:“10px 0 4px”,color:”#111318”}}>{inlineMd(h1[1])}</div>);i++;continue;}
+const li=line.match(/^[-*]\s+(.*)/);
+if(li){
+const items=[li[1]];i++;
+while(i<lines.length&&lines[i].match(/^[-*]\s+(.*)/)){items.push(lines[i].match(/^[-*]\s+(.*)/)[1]);i++;}
+out.push(<ul key={i} style={{margin:“4px 0 4px 16px”,padding:0,listStyle:“disc”}}>{items.map((it,j)=><li key={j} style={{fontSize:13,color:”#374151”,lineHeight:1.7}}>{inlineMd(it)}</li>)}</ul>);
+continue;
+}
+if(line.trim()===””){out.push(<div key={i} style={{height:6}}/>);i++;continue;}
+out.push(<div key={i} style={{fontSize:13,color:”#374151”,lineHeight:1.7,margin:“2px 0”}}>{inlineMd(line)}</div>);
+i++;
+}
+return out;
 }
 function inlineMd(text){
-  const parts=text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((p,i)=>{
-    if(p.startsWith('**')&&p.endsWith('**')) return <strong key={i} style={{fontWeight:600,color:"#111318"}}>{p.slice(2,-2)}</strong>;
-    if(p.startsWith('`')&&p.endsWith('`')) return <code key={i} style={{background:"#f3f4f6",borderRadius:3,padding:"1px 5px",fontSize:12,fontFamily:"'Menlo','Consolas',monospace",color:"#2563eb"}}>{p.slice(1,-1)}</code>;
-    return p;
-  });
+const parts=text.split(/(**[^*]+**|`[^`]+`)/g); return parts.map((p,i)=>{ if(p.startsWith('**')&&p.endsWith('**')) return <strong key={i} style={{fontWeight:600,color:"#111318"}}>{p.slice(2,-2)}</strong>; if(p.startsWith('`’)&&p.endsWith(’`’)) return <code key={i} style={{background:”#f3f4f6”,borderRadius:3,padding:“1px 5px”,fontSize:12,fontFamily:”‘Menlo’,‘Consolas’,monospace”,color:”#2563eb”}}>{p.slice(1,-1)}</code>;
+return p;
+});
 }
 
 function KnowledgeTab({data,save}){
-  const [search,setSearch]=useState("");
-  const [showAddTheme,setShowAddTheme]=useState(false);
-  const [themeName,setThemeName]=useState("");
-  const [activeTheme,setActiveTheme]=useState(null);
-  const [showAddEntry,setShowAddEntry]=useState(false);
-  const [entryContent,setEntryContent]=useState("");
-  const [entryLogRef,setEntryLogRef]=useState({date:"",taskId:""});
-  const [refModal,setRefModal]=useState(null);
-  const [editEntry,setEditEntry]=useState(null); // {themeId, entryId, content}
+const [search,setSearch]=useState(””);
+const [expandedDomains,setExpandedDomains]=useState(()=>Object.fromEntries(DOMAINS.map(d=>[d.id,true])));
+const [expandedThemes,setExpandedThemes]=useState({});
+const [addingThemeDomain,setAddingThemeDomain]=useState(null);
+const [themeName,setThemeName]=useState(””);
+const [activeTheme,setActiveTheme]=useState(null); // {domainId, themeId}
+const [showAddEntry,setShowAddEntry]=useState(false);
+const [entryContent,setEntryContent]=useState(””);
+const [entryLogRef,setEntryLogRef]=useState({date:””,taskId:””});
+const [refModal,setRefModal]=useState(null);
+const [editEntry,setEditEntry]=useState(null); // {domainId,themeId,entryId,content}
 
-  const themes=data.knowledge?.themes||[];
-  const saveKnow=k=>save({...data,knowledge:k});
-  const addTheme=()=>{
-    if(!themeName.trim()) return;
-    saveKnow({...data.knowledge,themes:[...themes,{id:Date.now(),name:themeName.trim(),entries:[]}]});
-    setThemeName("");setShowAddTheme(false);
-  };
-  const removeTheme=id=>saveKnow({...data.knowledge,themes:softDeleteTheme(themes,id)});
-  const addEntry=()=>{
-    if(!entryContent.trim()||!activeTheme) return;
-    const entry={id:Date.now(),content:entryContent.trim(),
-      logRef:entryLogRef.date&&entryLogRef.taskId?entryLogRef:null,createdAt:today(),updatedAt:Date.now()};
-    saveKnow({...data.knowledge,themes:themes.map(t=>t.id===activeTheme?{...t,updatedAt:Date.now(),entries:[...t.entries,entry]}:t)});
-    setEntryContent("");setEntryLogRef({date:"",taskId:""});setShowAddEntry(false);
-  };
-  const saveEntryEdit=()=>{
-    if(!editEntry||!editEntry.content.trim()) return;
-    saveKnow({...data.knowledge,themes:themes.map(t=>t.id===editEntry.themeId
-      ?{...t,updatedAt:Date.now(),entries:t.entries.map(e=>e.id===editEntry.entryId?{...e,content:editEntry.content.trim(),updatedAt:Date.now()}:e)}
-      :t)});
-    setEditEntry(null);
-  };
-  const removeEntry=(themeId,entryId)=>{
-    saveKnow({...data.knowledge,themes:softDeleteEntry(themes,themeId,entryId)});
-  };
-  const findTask=ref=>{
-    if(!ref) return null;
-    return (data.logs[ref.date]||[]).find(t=>t.id===Number(ref.taskId))||null;
-  };
-  const logDates=Object.keys(data.logs).sort().reverse();
-  const tasksForDate=entryLogRef.date?(data.logs[entryLogRef.date]||[]):[];
-  const visibleThemes=themes.filter(t=>!t._deleted);
-  const filteredThemes=visibleThemes.filter(t=>!search||t.name.includes(search)||t.entries.some(e=>!e._deleted&&e.content.includes(search)));
+const domains=data.knowledge?.domains||DOMAINS.map(d=>({id:d.id,themes:[]}));
+const saveKnow=k=>save({…data,knowledge:k});
 
-  return(
-    <>
-      <div style={S.card}>
-        <input style={S.input} placeholder="搜索知识库…" value={search} onChange={e=>setSearch(e.target.value)}/>
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <span style={{fontSize:13,color:"#6b7280"}}>{visibleThemes.length} 个主题</span>
-        <button style={S.btnSm("#2563eb")} onClick={()=>setShowAddTheme(v=>!v)}>{showAddTheme?"取消":"+ 新建主题"}</button>
-      </div>
-      {showAddTheme&&(
-        <div style={S.card}>
-          <input style={{...S.input,marginBottom:8}} placeholder="主题名称，例如：财务流程设计" value={themeName}
-            onChange={e=>setThemeName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTheme()}/>
-          <button style={S.btn()} onClick={addTheme}>创建主题</button>
-        </div>
-      )}
-      {filteredThemes.length===0&&(
-        <div style={{textAlign:"center",color:"#9ca3af",padding:40}}>
-          <div style={{fontSize:32,marginBottom:8}}>📚</div>
-          <p style={{fontSize:13}}>{search?"没有找到相关内容":"每次导出数据与 Claude 分析后，将提炼结果粘贴进来"}</p>
-        </div>
-      )}
-      {filteredThemes.map(theme=>(
-        <div key={theme.id} style={S.card}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-            <div>
-              <div style={{fontWeight:600,fontSize:14}}>{theme.name}</div>
-              <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>{theme.entries.length} 条经验</div>
-            </div>
-            <div style={{display:"flex",gap:6}}>
-              <button style={S.btnSm("#2563eb")} onClick={()=>{setActiveTheme(theme.id);setShowAddEntry(true);}}>+ 新增</button>
-              <button style={S.btnSm("#dc2626")} onClick={()=>removeTheme(theme.id)}>删除</button>
-            </div>
+const toggleDomain=id=>setExpandedDomains(v=>({…v,[id]:!v[id]}));
+const toggleTheme=id=>setExpandedThemes(v=>({…v,[id]:!v[id]}));
+
+const addTheme=()=>{
+if(!themeName.trim()||!addingThemeDomain) return;
+const newTheme={id:Date.now(),name:themeName.trim(),entries:[],updatedAt:Date.now()};
+const newDomains=domains.map(d=>d.id===addingThemeDomain?{…d,themes:[…( d.themes||[]),newTheme]}:d);
+saveKnow({…data.knowledge,domains:newDomains});
+setThemeName(””);setAddingThemeDomain(null);
+setExpandedThemes(v=>({…v,[newTheme.id]:true}));
+};
+
+const removeTheme=(domainId,themeId)=>{
+saveKnow({…data.knowledge,domains:softDeleteTheme(domains,domainId,themeId)});
+};
+
+const addEntry=()=>{
+if(!entryContent.trim()||!activeTheme) return;
+const entry={id:Date.now(),content:entryContent.trim(),
+logRef:entryLogRef.date&&entryLogRef.taskId?entryLogRef:null,
+createdAt:today(),updatedAt:Date.now()};
+const newDomains=domains.map(d=>d.id===activeTheme.domainId
+?{…d,themes:(d.themes||[]).map(t=>t.id===activeTheme.themeId
+?{…t,updatedAt:Date.now(),entries:[…(t.entries||[]),entry]}:t)}:d);
+saveKnow({…data.knowledge,domains:newDomains});
+setEntryContent(””);setEntryLogRef({date:””,taskId:””});setShowAddEntry(false);setActiveTheme(null);
+};
+
+const saveEntryEdit=()=>{
+if(!editEntry||!editEntry.content.trim()) return;
+const newDomains=domains.map(d=>d.id===editEntry.domainId
+?{…d,themes:(d.themes||[]).map(t=>t.id===editEntry.themeId
+?{…t,updatedAt:Date.now(),entries:(t.entries||[]).map(e=>e.id===editEntry.entryId
+?{…e,content:editEntry.content.trim(),updatedAt:Date.now()}:e)}:t)}:d);
+saveKnow({…data.knowledge,domains:newDomains});
+setEditEntry(null);
+};
+
+const removeEntry=(domainId,themeId,entryId)=>{
+saveKnow({…data.knowledge,domains:softDeleteEntry(domains,domainId,themeId,entryId)});
+};
+
+const findTask=ref=>{
+if(!ref) return null;
+return (data.logs[ref.date]||[]).find(t=>t.id===Number(ref.taskId))||null;
+};
+
+const logDates=Object.keys(data.logs).sort().reverse();
+const tasksForDate=entryLogRef.date?(data.logs[entryLogRef.date]||[]):[];
+
+// search filter: flatten to find matching themes
+const domainMatches=domains.map(d=>{
+const visibleThemes=(d.themes||[]).filter(t=>!t._deleted);
+const filtered=!search?visibleThemes:visibleThemes.filter(t=>
+t.name.includes(search)||DOMAINS.find(x=>x.id===d.id)?.label.includes(search)||
+(t.entries||[]).some(e=>!e._deleted&&e.content.includes(search)));
+return {…d,filteredThemes:filtered};
+});
+
+const totalThemes=domains.reduce((s,d)=>s+(d.themes||[]).filter(t=>!t._deleted).length,0);
+const totalEntries=domains.reduce((s,d)=>(d.themes||[]).filter(t=>!t._deleted)
+.reduce((s2,t)=>s2+(t.entries||[]).filter(e=>!e._deleted).length,s),0);
+
+return(
+<>
+<div style={S.card}>
+<input style={S.input} placeholder=“搜索知识库…” value={search} onChange={e=>setSearch(e.target.value)}/>
+</div>
+<div style={{fontSize:12,color:”#9ca3af”,marginBottom:12,textAlign:“center”}}>
+{totalThemes} 个主题 · {totalEntries} 条经验
+</div>
+
+```
+  {domainMatches.map((d,di)=>{
+    const domainDef=DOMAINS.find(x=>x.id===d.id);
+    const isExpanded=expandedDomains[d.id]!==false;
+    const hasContent=d.filteredThemes.length>0;
+    if(search&&!hasContent) return null;
+
+    return(
+      <div key={d.id} style={{marginBottom:12}}>
+        {/* Domain header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+          padding:"10px 14px",background:"#1e293b",borderRadius:isExpanded?"10px 10px 0 0":"10px",
+          cursor:"pointer",userSelect:"none"}}
+          onClick={()=>toggleDomain(d.id)}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:"#94a3b8",fontWeight:700,letterSpacing:1}}>
+              {isExpanded?"▾":"▸"}
+            </span>
+            <span style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{domainDef?.label}</span>
+            <span style={{fontSize:11,color:"#64748b"}}>
+              {(d.themes||[]).filter(t=>!t._deleted).length} 个主题
+            </span>
           </div>
-          {activeTheme===theme.id&&showAddEntry&&(
-            <div style={{background:"#f0f9ff",borderRadius:8,padding:12,marginBottom:12,border:"1px solid #bfdbfe"}}>
-              <label style={S.label}>经验内容</label>
-              <textarea style={{...S.textarea,marginBottom:8}} placeholder="粘贴从 Claude 提炼的经验内容…"
-                value={entryContent} onChange={e=>setEntryContent(e.target.value)}/>
-              <label style={S.label}>关联每日记录（可选）</label>
-              <div style={{...S.row,marginBottom:8}}>
-                <select style={{...S.select,flex:1}} value={entryLogRef.date}
-                  onChange={e=>setEntryLogRef({date:e.target.value,taskId:""})}>
-                  <option value="">选择日期</option>
-                  {logDates.map(d=><option key={d} value={d}>{d}</option>)}
-                </select>
-                <select style={{...S.select,flex:2}} value={entryLogRef.taskId}
-                  onChange={e=>setEntryLogRef({...entryLogRef,taskId:e.target.value})} disabled={!tasksForDate.length}>
-                  <option value="">选择事项</option>
-                  {tasksForDate.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+          <button style={{...S.btnSm("#2563eb"),fontSize:10}}
+            onClick={e=>{e.stopPropagation();setAddingThemeDomain(d.id);setExpandedDomains(v=>({...v,[d.id]:true}));}}>
+            + 主题
+          </button>
+        </div>
+
+        {isExpanded&&(
+          <div style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderTop:"none",
+            borderRadius:"0 0 10px 10px",padding:"8px 10px"}}>
+
+            {/* Add theme inline */}
+            {addingThemeDomain===d.id&&(
+              <div style={{display:"flex",gap:6,marginBottom:8,padding:"8px",background:"#fff",borderRadius:8,border:"1px solid #bfdbfe"}}>
+                <input style={{...S.input,flex:1}} placeholder="主题名称，例如：合并报表处理"
+                  value={themeName} onChange={e=>setThemeName(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&addTheme()} autoFocus/>
+                <button style={{...S.btnSm("#2563eb"),padding:"8px 12px"}} onClick={addTheme}>✓</button>
+                <button style={{...S.btnSm(),padding:"8px 12px"}} onClick={()=>{setAddingThemeDomain(null);setThemeName("");}}>✕</button>
               </div>
-              <div style={{display:"flex",gap:6}}>
-                <button style={{...S.btn(),flex:1,padding:"8px 0"}} onClick={addEntry}>保存</button>
-                <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"8px 0"}} onClick={()=>{setShowAddEntry(false);setActiveTheme(null);}}>取消</button>
+            )}
+
+            {d.filteredThemes.length===0&&!addingThemeDomain&&(
+              <div style={{textAlign:"center",color:"#94a3b8",padding:"16px 0",fontSize:12}}>
+                暂无主题，点击右上角「+ 主题」添加
               </div>
-            </div>
+            )}
+
+            {d.filteredThemes.map(theme=>{
+              const isThemeExpanded=expandedThemes[theme.id]!==false;
+              const visibleEntries=(theme.entries||[]).filter(e=>!e._deleted);
+              const isAddingEntry=activeTheme?.themeId===theme.id&&showAddEntry;
+
+              return(
+                <div key={theme.id} style={{marginBottom:6,background:"#fff",borderRadius:8,
+                  border:"1px solid #e5e7eb",overflow:"hidden"}}>
+                  {/* Theme header */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"9px 12px",cursor:"pointer",background:isThemeExpanded?"#fff":"#fafafa"}}
+                    onClick={()=>toggleTheme(theme.id)}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:10,color:"#94a3b8"}}>{isThemeExpanded?"▾":"▸"}</span>
+                      <span style={{fontSize:13,fontWeight:600,color:"#1a1d27"}}>{theme.name}</span>
+                      <span style={{fontSize:11,color:"#9ca3af"}}>{visibleEntries.length} 条</span>
+                    </div>
+                    <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                      <button style={{...S.btnSm("#2563eb"),fontSize:10}} onClick={()=>{
+                        setActiveTheme({domainId:d.id,themeId:theme.id});
+                        setShowAddEntry(true);
+                        setExpandedThemes(v=>({...v,[theme.id]:true}));
+                      }}>+ 条目</button>
+                      <button style={{...S.btnSm("#dc2626"),fontSize:10}} onClick={()=>removeTheme(d.id,theme.id)}>删</button>
+                    </div>
+                  </div>
+
+                  {isThemeExpanded&&(
+                    <div style={{padding:"0 12px 10px"}}>
+                      {/* Add entry form */}
+                      {isAddingEntry&&(
+                        <div style={{background:"#f0f9ff",borderRadius:8,padding:12,marginBottom:8,
+                          marginTop:8,border:"1px solid #bfdbfe"}}>
+                          <label style={S.label}>经验内容</label>
+                          <textarea style={{...S.textarea,marginBottom:8}}
+                            placeholder="粘贴从 Claude 提炼的经验内容（支持 Markdown）…"
+                            value={entryContent} onChange={e=>setEntryContent(e.target.value)}/>
+                          <label style={S.label}>关联每日记录（可选）</label>
+                          <div style={{...S.row,marginBottom:8}}>
+                            <select style={{...S.select,flex:1}} value={entryLogRef.date}
+                              onChange={e=>setEntryLogRef({date:e.target.value,taskId:""})}>
+                              <option value="">选择日期</option>
+                              {logDates.map(d=><option key={d} value={d}>{d}</option>)}
+                            </select>
+                            <select style={{...S.select,flex:2}} value={entryLogRef.taskId}
+                              onChange={e=>setEntryLogRef({...entryLogRef,taskId:e.target.value})}
+                              disabled={!tasksForDate.length}>
+                              <option value="">选择事项</option>
+                              {tasksForDate.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button style={{...S.btn(),flex:1,padding:"8px 0"}} onClick={addEntry}>保存</button>
+                            <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"8px 0"}}
+                              onClick={()=>{setShowAddEntry(false);setActiveTheme(null);}}>取消</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Entry list */}
+                      {visibleEntries.length===0&&!isAddingEntry&&(
+                        <div style={{fontSize:12,color:"#9ca3af",padding:"8px 0",textAlign:"center"}}>
+                          暂无条目
+                        </div>
+                      )}
+                      {visibleEntries.map(entry=>{
+                        const task=findTask(entry.logRef);
+                        const isEditingEntry=editEntry?.entryId===entry.id&&editEntry?.themeId===theme.id;
+                        return(
+                          <div key={entry.id} style={{padding:"10px 12px",background:"#f9fafb",
+                            borderRadius:8,marginBottom:6,marginTop:6,borderLeft:"3px solid #2563eb"}}>
+                            {isEditingEntry?(
+                              <div>
+                                <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.content}
+                                  onChange={e=>setEditEntry({...editEntry,content:e.target.value})}/>
+                                <div style={{display:"flex",gap:6}}>
+                                  <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEntryEdit}>保存</button>
+                                  <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}}
+                                    onClick={()=>setEditEntry(null)}>取消</button>
+                                </div>
+                              </div>
+                            ):(
+                              <div>
+                                <div style={{marginBottom:6}}>{renderMd(entry.content)}</div>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                                    <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
+                                    {entry.logRef&&task&&(
+                                      <button style={{...S.btnSm("#f0f9ff","#2563eb"),border:"1px solid #bfdbfe",fontSize:10}}
+                                        onClick={()=>setRefModal({task,date:entry.logRef.date})}>查看来源 →</button>
+                                    )}
+                                  </div>
+                                  <div style={{display:"flex",gap:4}}>
+                                    <button style={S.btnSm("#f59e0b")}
+                                      onClick={()=>setEditEntry({domainId:d.id,themeId:theme.id,entryId:entry.id,content:entry.content})}>✎</button>
+                                    <button style={S.btnSm("#dc2626")}
+                                      onClick={()=>removeEntry(d.id,theme.id,entry.id)}>删</button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  })}
+
+  {totalThemes===0&&!search&&(
+    <div style={{textAlign:"center",color:"#9ca3af",padding:40}}>
+      <div style={{fontSize:32,marginBottom:8}}>📚</div>
+      <p style={{fontSize:13}}>点击各域右侧「+ 主题」开始建立知识库</p>
+    </div>
+  )}
+
+  {refModal&&(
+    <div style={S.modal} onClick={e=>e.target===e.currentTarget&&setRefModal(null)}>
+      <div style={S.modalBox}>
+        <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>来源记录</div>
+        <div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>{refModal.date}</div>
+        <div style={{padding:12,background:"#f9fafb",borderRadius:8,marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <span style={{width:8,height:8,borderRadius:"50%",background:CATS.find(c=>c.key===refModal.task.cat)?.color||"#9ca3af",flexShrink:0}}/>
+            <span style={{fontSize:14,fontWeight:500}}>{refModal.task.name}</span>
+          </div>
+          <div style={{fontSize:12,color:"#6b7280",marginBottom:4}}>
+            {CATS.find(c=>c.key===refModal.task.cat)?.label} · {fmtMins(refModal.task.mins)}
+          </div>
+          {refModal.task.note&&(
+            <div style={{fontSize:13,color:"#374151",marginTop:8,paddingTop:8,borderTop:"1px solid #e5e7eb"}}>{refModal.task.note}</div>
           )}
-          {theme.entries.map(entry=>{
-            const task=findTask(entry.logRef);
-            const isEditingEntry=editEntry?.entryId===entry.id&&editEntry?.themeId===theme.id;
-            return(
-              <div key={entry.id} style={{padding:"10px 12px",background:"#f9fafb",borderRadius:8,marginBottom:6,borderLeft:"3px solid #2563eb"}}>
-                {isEditingEntry?(
-                  <div>
-                    <textarea style={{...S.textarea,marginBottom:8}} value={editEntry.content}
-                      onChange={e=>setEditEntry({...editEntry,content:e.target.value})}/>
-                    <div style={{display:"flex",gap:6}}>
-                      <button style={{...S.btn(),flex:1,padding:"7px 0"}} onClick={saveEntryEdit}>保存</button>
-                      <button style={{...S.btn("#f9fafb","#374151"),flex:1,padding:"7px 0"}} onClick={()=>setEditEntry(null)}>取消</button>
-                    </div>
-                  </div>
-                ):(
-                  <div>
-                    <div style={{marginBottom:6}}>{renderMd(entry.content)}</div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                        <span style={{fontSize:11,color:"#9ca3af"}}>{entry.createdAt}</span>
-                        {entry.logRef&&task&&(
-                          <button style={{...S.btnSm("#f0f9ff","#2563eb"),border:"1px solid #bfdbfe",fontSize:10}}
-                            onClick={()=>setRefModal({task,date:entry.logRef.date})}>查看来源 →</button>
-                        )}
-                      </div>
-                      <div style={{display:"flex",gap:4}}>
-                        <button style={S.btnSm("#f59e0b")} onClick={()=>setEditEntry({themeId:theme.id,entryId:entry.id,content:entry.content})}>✎</button>
-                        <button style={S.btnSm("#dc2626")} onClick={()=>removeEntry(theme.id,entry.id)}>删</button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
-      ))}
-      {refModal&&(
-        <div style={S.modal} onClick={e=>e.target===e.currentTarget&&setRefModal(null)}>
-          <div style={S.modalBox}>
-            <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>来源记录</div>
-            <div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>{refModal.date}</div>
-            <div style={{padding:12,background:"#f9fafb",borderRadius:8,marginBottom:12}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                <span style={{width:8,height:8,borderRadius:"50%",background:CATS.find(c=>c.key===refModal.task.cat)?.color||"#9ca3af",flexShrink:0}}/>
-                <span style={{fontSize:14,fontWeight:500}}>{refModal.task.name}</span>
-              </div>
-              <div style={{fontSize:12,color:"#6b7280",marginBottom:4}}>
-                {CATS.find(c=>c.key===refModal.task.cat)?.label} · {fmtMins(refModal.task.mins)}
-              </div>
-              {refModal.task.note&&(
-                <div style={{fontSize:13,color:"#374151",marginTop:8,paddingTop:8,borderTop:"1px solid #e5e7eb"}}>{refModal.task.note}</div>
-              )}
-            </div>
-            <button style={S.btn("#f9fafb","#374151")} onClick={()=>setRefModal(null)}>关闭</button>
-          </div>
-        </div>
-      )}
-    </>
-  );
+        <button style={S.btn("#f9fafb","#374151")} onClick={()=>setRefModal(null)}>关闭</button>
+      </div>
+    </div>
+  )}
+</>
+```
+
+);
 }
 
 // ── Settings Tab ──────────────────────────────────────────
 function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,
-  syncStatus,syncMsg,lastSynced,isConfigured,connecting,connectGist,connectExistingGist,disconnectGist,manualSync}){
-  const [showToken,setShowToken]=useState(false);
-  const [showPwd,setShowPwd]=useState(false);
-  const [existingId,setExistingId]=useState("");
-  const [connectMode,setConnectMode]=useState("new"); // "new" | "existing"
+syncStatus,syncMsg,lastSynced,isConfigured,connecting,connectGist,connectExistingGist,disconnectGist,manualSync}){
+const [showToken,setShowToken]=useState(false);
+const [showPwd,setShowPwd]=useState(false);
+const [existingId,setExistingId]=useState(””);
+const [connectMode,setConnectMode]=useState(“new”); // “new” | “existing”
 
-  const importData=e=>{
-    const file=e.target.files[0];if(!file) return;
-    const reader=new FileReader();
-    reader.onload=async ev=>{
-      try{
-        const d=JSON.parse(ev.target.result);
-        const merged={
-          logs:mergeLogs(d.logs||{},data.logs||{}),
-          pool:mergePool(d.pool||{projects:[],items:[]},data.pool||{projects:[],items:[]}),
-          knowledge:mergeKnowledge(d.knowledge||{themes:[]},data.knowledge||{themes:[]}),
-        };
-        await save(merged);
-        alert("导入成功！");
-      }catch{alert("文件格式有误");}
-    };
-    reader.readAsText(file);e.target.value="";
-  };
+const importData=e=>{
+const file=e.target.files[0];if(!file) return;
+const reader=new FileReader();
+reader.onload=async ev=>{
+try{
+const d=JSON.parse(ev.target.result);
+const merged={
+logs:mergeLogs(d.logs||{},data.logs||{}),
+pool:mergePool(d.pool||{projects:[],items:[]},data.pool||{projects:[],items:[]}),
+knowledge:mergeKnowledge(d.knowledge||{domains:[]},data.knowledge||{domains:[]}),
+};
+await save(merged);
+alert(“导入成功！”);
+}catch{alert(“文件格式有误”);}
+};
+reader.readAsText(file);e.target.value=””;
+};
 
-  const syncColor={unconfigured:"#9ca3af",syncing:"#d97706",synced:"#059669",error:"#dc2626"}[syncStatus];
+const syncColor={unconfigured:”#9ca3af”,syncing:”#d97706”,synced:”#059669”,error:”#dc2626”}[syncStatus];
 
-  return(
-    <>
-      <div style={S.card}>
-        <label style={S.label}>云端同步 · GitHub Gist</label>
-        {isConfigured?(
-          <div style={{marginBottom:12,padding:"10px 12px",background:"#f0fdf4",borderRadius:8,border:"1px solid #bbf7d0"}}>
-            <div style={{fontSize:13,color:"#15803d",fontWeight:600}}>✓ 已连接</div>
-            <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>Gist ID: {ghGistId.slice(0,8)}…</div>
-            {lastSynced&&<div style={{fontSize:11,color:"#6b7280"}}>上次同步：{lastSynced}</div>}
-          </div>
-        ):(
-          <div style={{marginBottom:12,padding:"10px 12px",background:"#fafafa",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,color:"#6b7280"}}>
-            未连接，数据仅保存在本设备
-          </div>
-        )}
-        <label style={S.label}>GitHub Token</label>
-        <div style={{display:"flex",gap:6,marginBottom:10}}>
-          <input style={{...S.input,flex:1}} type={showToken?"text":"password"}
-            placeholder="ghp_xxxxxxxxxxxxxxxx" value={ghToken}
-            onChange={e=>setGhToken(e.target.value)} disabled={isConfigured}/>
-          <button style={{...S.btnSm(),padding:"10px 12px"}} onClick={()=>setShowToken(v=>!v)}>{showToken?"隐藏":"显示"}</button>
-        </div>
-        <label style={S.label}>加密密码</label>
-        <div style={{display:"flex",gap:6,marginBottom:12}}>
-          <input style={{...S.input,flex:1}} type={showPwd?"text":"password"}
-            placeholder="自定义加密密码（请牢记）" value={encPwd}
-            onChange={e=>setEncPwd(e.target.value)} disabled={isConfigured}/>
-          <button style={{...S.btnSm(),padding:"10px 12px"}} onClick={()=>setShowPwd(v=>!v)}>{showPwd?"隐藏":"显示"}</button>
-        </div>
-        <div style={{fontSize:11,color:"#9ca3af",marginBottom:12}}>数据上传前在本地加密，GitHub 只存密文。密码丢失数据无法恢复。</div>
-        {syncMsg&&(
-          <div style={{fontSize:12,color:syncStatus==="error"?"#dc2626":"#059669",marginBottom:10,
-            padding:"8px 10px",background:syncStatus==="error"?"#fef2f2":"#f0fdf4",borderRadius:6}}>
-            {syncMsg}
-          </div>
-        )}
-        {!isConfigured?(
-          <>
-            <div style={{display:"flex",gap:6,marginBottom:12}}>
-              <button style={{...S.btn(connectMode==="new"?"#2563eb":"#f9fafb",connectMode==="new"?"#fff":"#374151"),flex:1}}
-                onClick={()=>setConnectMode("new")}>新建 Gist</button>
-              <button style={{...S.btn(connectMode==="existing"?"#2563eb":"#f9fafb",connectMode==="existing"?"#fff":"#374151"),flex:1}}
-                onClick={()=>setConnectMode("existing")}>使用已有 Gist</button>
-            </div>
-            {connectMode==="existing"&&(
-              <div style={{marginBottom:12}}>
-                <label style={S.label}>已有 Gist ID</label>
-                <input style={{...S.input,marginBottom:4}} placeholder="粘贴 Gist ID" value={existingId}
-                  onChange={e=>setExistingId(e.target.value)}/>
-                <div style={{fontSize:11,color:"#9ca3af"}}>在 github.com → Your Gists 里找到对应 Gist，复制网址最后那串字符</div>
-              </div>
-            )}
-            <button style={S.btn()} onClick={()=>connectMode==="new"?connectGist():connectExistingGist(existingId)} disabled={connecting}>
-              {connecting?"连接中…":connectMode==="new"?"新建并连接":"连接已有 Gist"}
-            </button>
-          </>
-        ):(
-          <div style={{display:"flex",gap:8}}>
-            <button style={{...S.btn("#2563eb"),flex:2}} onClick={manualSync} disabled={syncStatus==="syncing"}>
-              {syncStatus==="syncing"?"同步中…":"↻ 立即同步"}
-            </button>
-            <button style={{...S.btn("#dc2626"),flex:1}} onClick={disconnectGist}>断开</button>
-          </div>
-        )}
-      </div>
-      <div style={S.card}>
-        <label style={S.label}>本地备份</label>
-        <div style={{fontSize:11,color:"#9ca3af",marginBottom:10}}>导入旧版追踪器数据或导出备份</div>
-        <label style={{display:"block",padding:"9px 0",background:"#f9fafb",border:"1px solid #e5e7eb",
-          borderRadius:8,color:"#374151",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"center"}}>
-          ↑ 导入备份文件
-          <input type="file" accept=".json" onChange={importData} style={{display:"none"}}/>
-        </label>
-      </div>
-    </>
-  );
+return(
+<>
+<div style={S.card}>
+<label style={S.label}>云端同步 · GitHub Gist</label>
+{isConfigured?(
+<div style={{marginBottom:12,padding:“10px 12px”,background:”#f0fdf4”,borderRadius:8,border:“1px solid #bbf7d0”}}>
+<div style={{fontSize:13,color:”#15803d”,fontWeight:600}}>✓ 已连接</div>
+<div style={{fontSize:11,color:”#6b7280”,marginTop:2}}>Gist ID: {ghGistId.slice(0,8)}…</div>
+{lastSynced&&<div style={{fontSize:11,color:”#6b7280”}}>上次同步：{lastSynced}</div>}
+</div>
+):(
+<div style={{marginBottom:12,padding:“10px 12px”,background:”#fafafa”,borderRadius:8,border:“1px solid #e5e7eb”,fontSize:13,color:”#6b7280”}}>
+未连接，数据仅保存在本设备
+</div>
+)}
+<label style={S.label}>GitHub Token</label>
+<div style={{display:“flex”,gap:6,marginBottom:10}}>
+<input style={{…S.input,flex:1}} type={showToken?“text”:“password”}
+placeholder=“ghp_xxxxxxxxxxxxxxxx” value={ghToken}
+onChange={e=>setGhToken(e.target.value)} disabled={isConfigured}/>
+<button style={{…S.btnSm(),padding:“10px 12px”}} onClick={()=>setShowToken(v=>!v)}>{showToken?“隐藏”:“显示”}</button>
+</div>
+<label style={S.label}>加密密码</label>
+<div style={{display:“flex”,gap:6,marginBottom:12}}>
+<input style={{…S.input,flex:1}} type={showPwd?“text”:“password”}
+placeholder=“自定义加密密码（请牢记）” value={encPwd}
+onChange={e=>setEncPwd(e.target.value)} disabled={isConfigured}/>
+<button style={{…S.btnSm(),padding:“10px 12px”}} onClick={()=>setShowPwd(v=>!v)}>{showPwd?“隐藏”:“显示”}</button>
+</div>
+<div style={{fontSize:11,color:”#9ca3af”,marginBottom:12}}>数据上传前在本地加密，GitHub 只存密文。密码丢失数据无法恢复。</div>
+{syncMsg&&(
+<div style={{fontSize:12,color:syncStatus===“error”?”#dc2626”:”#059669”,marginBottom:10,
+padding:“8px 10px”,background:syncStatus===“error”?”#fef2f2”:”#f0fdf4”,borderRadius:6}}>
+{syncMsg}
+</div>
+)}
+{!isConfigured?(
+<>
+<div style={{display:“flex”,gap:6,marginBottom:12}}>
+<button style={{…S.btn(connectMode===“new”?”#2563eb”:”#f9fafb”,connectMode===“new”?”#fff”:”#374151”),flex:1}}
+onClick={()=>setConnectMode(“new”)}>新建 Gist</button>
+<button style={{…S.btn(connectMode===“existing”?”#2563eb”:”#f9fafb”,connectMode===“existing”?”#fff”:”#374151”),flex:1}}
+onClick={()=>setConnectMode(“existing”)}>使用已有 Gist</button>
+</div>
+{connectMode===“existing”&&(
+<div style={{marginBottom:12}}>
+<label style={S.label}>已有 Gist ID</label>
+<input style={{…S.input,marginBottom:4}} placeholder=“粘贴 Gist ID” value={existingId}
+onChange={e=>setExistingId(e.target.value)}/>
+<div style={{fontSize:11,color:”#9ca3af”}}>在 github.com → Your Gists 里找到对应 Gist，复制网址最后那串字符</div>
+</div>
+)}
+<button style={S.btn()} onClick={()=>connectMode===“new”?connectGist():connectExistingGist(existingId)} disabled={connecting}>
+{connecting?“连接中…”:connectMode===“new”?“新建并连接”:“连接已有 Gist”}
+</button>
+</>
+):(
+<div style={{display:“flex”,gap:8}}>
+<button style={{…S.btn(”#2563eb”),flex:2}} onClick={manualSync} disabled={syncStatus===“syncing”}>
+{syncStatus===“syncing”?“同步中…”:“↻ 立即同步”}
+</button>
+<button style={{…S.btn(”#dc2626”),flex:1}} onClick={disconnectGist}>断开</button>
+</div>
+)}
+</div>
+<div style={S.card}>
+<label style={S.label}>本地备份</label>
+<div style={{fontSize:11,color:”#9ca3af”,marginBottom:10}}>导入旧版追踪器数据或导出备份</div>
+<label style={{display:“block”,padding:“9px 0”,background:”#f9fafb”,border:“1px solid #e5e7eb”,
+borderRadius:8,color:”#374151”,fontSize:12,fontWeight:600,cursor:“pointer”,textAlign:“center”}}>
+↑ 导入备份文件
+<input type=“file” accept=”.json” onChange={importData} style={{display:“none”}}/>
+</label>
+</div>
+</>
+);
 }
 
-const root=ReactDOM.createRoot(document.getElementById("root"));
+const root=ReactDOM.createRoot(document.getElementById(“root”));
 root.render(<App/>);
 </script>
+
 </body>
 </html>
