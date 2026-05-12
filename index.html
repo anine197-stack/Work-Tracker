@@ -63,6 +63,58 @@ const DEFAULT_PROJECTS=[
   {name:"财务AI与流程自动化",type:"沉淀",goal:"识别重复工作，沉淀表格、规则和自动化试点。"},
   {name:"日常合规与流程兜底",type:"支持",goal:"承接无法完全避免的日常流程、注册、审批、制度细节。"},
 ];
+const PROJECT_AUTO_MERGE_RULES=[
+  {target:"年度预算与经营分析体系", type:"主线", aliases:["年度预算更新","运营报表"]},
+  {target:"审计/融资资料", type:"支持", aliases:["审计报告","融资资料跟进"]},
+  {target:"财务AI与流程自动化", type:"沉淀", aliases:["AI建设、效率提高相关","AI建设、效率提升相关"]},
+  {target:"日常合规与流程兜底", type:"支持", aliases:["杂事","今日"]},
+];
+const cleanProjectName=name=>String(name||"").trim().replace(/\s+/g,"");
+function defaultProjectMeta(name){
+  return DEFAULT_PROJECTS.find(p=>p.name===name)||{name,type:"支持",goal:""};
+}
+function autoMergeProjects(data){
+  let out={...data,projects:[...(data.projects||[])]};
+  const nameEq=(a,b)=>cleanProjectName(a)===cleanProjectName(b);
+  const active=()=>out.projects.filter(p=>p&&!p._deleted);
+  const updateOne=(id,patch)=>{out.projects=out.projects.map(p=>String(p.id)===String(id)?{...p,...patch,updatedAt:nowTs()}:p)};
+
+  for(const rule of PROJECT_AUTO_MERGE_RULES){
+    const meta=defaultProjectMeta(rule.target);
+    const related=active().filter(p=>nameEq(p.name,rule.target)||rule.aliases.some(a=>nameEq(p.name,a)));
+    if(!related.length) continue;
+
+    let target=related.find(p=>nameEq(p.name,rule.target));
+    if(!target){
+      target=related[0];
+      updateOne(target.id,{name:rule.target,type:target.type||rule.type||meta.type,status:target.status||"active",goal:target.goal||meta.goal||""});
+      target=out.projects.find(p=>String(p.id)===String(target.id));
+    }else{
+      const patch={};
+      if(!target.type) patch.type=rule.type||meta.type||"支持";
+      if(!target.goal&&meta.goal) patch.goal=meta.goal;
+      if(Object.keys(patch).length){updateOne(target.id,patch); target=out.projects.find(p=>String(p.id)===String(target.id));}
+    }
+
+    for(const p of related){
+      if(String(p.id)===String(target.id)) continue;
+      out=reassignProjectRefs(out,p.id,target.id);
+      out.projects=softDelete(out.projects,p.id);
+    }
+  }
+
+  const seen=new Map();
+  for(const p of active()){
+    const key=cleanProjectName(p.name);
+    if(!key) continue;
+    if(!seen.has(key)){seen.set(key,p); continue;}
+    const target=seen.get(key);
+    out=reassignProjectRefs(out,p.id,target.id);
+    out.projects=softDelete(out.projects,p.id);
+  }
+  return out;
+}
+
 const today=()=>new Date().toISOString().slice(0,10);
 const nowTs=()=>Date.now();
 const uid=()=>Date.now()+Math.floor(Math.random()*1000);
@@ -88,7 +140,7 @@ function mergeById(localArr=[], remoteArr=[]) {
       if(lt>=rt) map.set(key,item);
     }
   }
-  return Array.from(map.values()).filter(i=>!i._deleted);
+  return Array.from(map.values());
 }
 function mergeLogs(local={}, remote={}){
   const dates=new Set([...Object.keys(local||{}),...Object.keys(remote||{})]);
@@ -202,7 +254,7 @@ function normalizeData(input){
       updatedAt:x.updatedAt||x.id||nowTs(),
     }));
   }
-  return {
+  let normalized={
     version:3,
     logs,
     dailyNotes:d.dailyNotes||{},
@@ -211,6 +263,15 @@ function normalizeData(input){
     knowledge:normalizeKnowledge(d.knowledge||{}),
     meta:{...(d.meta||{}),migratedAt:d.version===3?d.meta?.migratedAt:new Date().toISOString()},
   };
+  // 项目自动清理只执行一次。
+  // 目的：把旧版「年度预算更新/运营报表/审计报告/杂事/今日」等历史项目
+  // 合并到新版标准项目，避免第一次迁移后项目重复。
+  // 一旦写入 projectAutoMergeDone，后续用户自己新增同名或相似项目，也不会再被自动迁移。
+  if(!normalized.meta.projectAutoMergeDone){
+    normalized=autoMergeProjects(normalized);
+    normalized.meta={...normalized.meta,projectAutoMergeDone:true,projectAutoMergeAt:new Date().toISOString()};
+  }
+  return normalized;
 }
 function mergeKnowledge(local,remote){
   const l=normalizeKnowledge(local), r=normalizeKnowledge(remote);
@@ -561,7 +622,7 @@ function ProjectsTab({data,save}){
 
   return <>
     <div style={S.card}>
-      <CardTitle sub="项目用于整理长期主线。先在这里把项目清干净，再去待办池给事项归项目。">项目</CardTitle>
+      <CardTitle sub="项目用于整理长期主线。旧版重复项目只会在首次迁移时自动合并；之后你新增项目不会再被自动清理。">项目</CardTitle>
       <div style={{display:"flex",gap:8,marginBottom:12}}>
         <input style={S.input} placeholder="新建项目，例如：电商条线财务闭环" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/>
         <button style={S.btn()} onClick={add}>+</button>
