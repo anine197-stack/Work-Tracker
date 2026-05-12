@@ -227,23 +227,32 @@ function mergeData(local,remote){
   });
 }
 
-async function deriveKey(pwd){
+// 加密兼容说明：旧版 tracker 使用 wt-salt-v1。
+// v3 结构可以升级，但加密 salt 不能随便改；否则旧 Gist 会无法解密，表现为“同步失败”。
+// 因此：加密统一继续使用 v1；解密同时兼容 v1 和曾短暂使用过的 v3。
+async function deriveKey(pwd,salt="wt-salt-v1"){
   const enc=new TextEncoder();
   const km=await crypto.subtle.importKey("raw",enc.encode(pwd),"PBKDF2",false,["deriveKey"]);
-  return crypto.subtle.deriveKey({name:"PBKDF2",salt:enc.encode("wt-salt-v3"),iterations:100000,hash:"SHA-256"},km,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt:enc.encode(salt),iterations:100000,hash:"SHA-256"},km,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
 }
 async function encryptStr(text,pwd){
-  const key=await deriveKey(pwd);
+  const key=await deriveKey(pwd,"wt-salt-v1");
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const buf=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(text));
   const out=new Uint8Array(12+buf.byteLength);out.set(iv);out.set(new Uint8Array(buf),12);
   return btoa(String.fromCharCode(...out));
 }
 async function decryptStr(b64,pwd){
-  const key=await deriveKey(pwd);
   const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
-  const dec=await crypto.subtle.decrypt({name:"AES-GCM",iv:buf.slice(0,12)},key,buf.slice(12));
-  return new TextDecoder().decode(dec);
+  let lastErr=null;
+  for(const salt of ["wt-salt-v1","wt-salt-v3"]){
+    try{
+      const key=await deriveKey(pwd,salt);
+      const dec=await crypto.subtle.decrypt({name:"AES-GCM",iv:buf.slice(0,12)},key,buf.slice(12));
+      return new TextDecoder().decode(dec);
+    }catch(e){lastErr=e}
+  }
+  throw lastErr||new Error("解密失败");
 }
 const GH={
   async create(token,content){
