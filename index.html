@@ -765,11 +765,26 @@ function ProjectsTab({data,save}){
   const restore=id=>save({...data,projects:projects.map(x=>String(x.id)===String(id)?{...x,_deleted:false,status:x.status||"active",updatedAt:nowTs()}:x)});
   const relatedFor=proj=>{
     if(!proj)return {tasks:[],logs:[],knowledge:[]};
-    const tasks=(data.tasks||[]).filter(t=>String(t.projectId)===String(proj.id)&&!["done","dropped"].includes(t.status));
+    const tasks=(data.tasks||[]).filter(t=>
+      String(t.projectId)===String(proj.id) &&
+      !t._deleted &&
+      !["done","dropped"].includes(t.status)
+    );
     const logs=[];
-    for(const [d,arr] of Object.entries(data.logs||{})){for(const e of arr||[]){if(String(e.projectId)===String(proj.id)) logs.push({...e,date:d})}}
+    for(const [d,arr] of Object.entries(data.logs||{})){
+      for(const e of arr||[]){
+        if(String(e.projectId)===String(proj.id) && !e._deleted) logs.push({...e,date:d});
+      }
+    }
     const knowledge=[];
-    for(const dom of data.knowledge?.domains||[]){for(const th of dom.themes||[]){for(const e of th.entries||[]){if(String(e.projectId)===String(proj.id)&&!e._deleted) knowledge.push({...e,themeName:th.name,domainId:dom.id})}}}
+    for(const dom of data.knowledge?.domains||[]){
+      for(const th of dom.themes||[]){
+        if(th._deleted) continue;
+        for(const e of th.entries||[]){
+          if(String(e.projectId)===String(proj.id)&&!e._deleted) knowledge.push({...e,themeName:th.name,domainId:dom.id});
+        }
+      }
+    }
     return {tasks,logs,knowledge};
   };
   const related=relatedFor(p);
