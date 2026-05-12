@@ -219,11 +219,13 @@ function normalizeKnowledge(k){
   const domains=(k&&k.domains)||DOMAINS.map(d=>({id:d.id,themes:[]}));
   return {domains:DOMAINS.map(d=>{
     const old=domains.find(x=>x.id===d.id)||{id:d.id,themes:[]};
-    return {id:d.id,themes:(old.themes||[]).filter(t=>!t._deleted).map(t=>({
+    // 同样保留 _deleted 墓碑，避免知识主题/条目同步后复活；页面显示处再过滤。
+    return {id:d.id,themes:(old.themes||[]).map(t=>({
       id:t.id||uid(),
       name:t.name||"未命名主题",
       updatedAt:t.updatedAt||t.id||nowTs(),
-      entries:(t.entries||[]).filter(e=>!e._deleted).map(e=>({
+      _deleted:!!t._deleted,
+      entries:(t.entries||[]).map(e=>({
         id:e.id||uid(),
         title:e.title||"",
         content:e.content||"",
@@ -234,6 +236,7 @@ function normalizeKnowledge(k){
         logRef:e.logRef||null,
         createdAt:e.createdAt||today(),
         updatedAt:e.updatedAt||e.id||nowTs(),
+        _deleted:!!e._deleted,
       }))
     }))};
   })};
@@ -245,15 +248,20 @@ function normalizeData(input){
   const tasks=(d.tasks||d.pool?.items||[]).map(normalizeTask);
   const logs={};
   for(const [date,arr] of Object.entries(d.logs||{})){
-    logs[date]=(arr||[]).filter(x=>!x._deleted).map(x=>({
+    // 注意：这里不能过滤 _deleted。
+    // _deleted 是同步合并时防止云端旧记录“复活”的墓碑标记；
+    // 页面显示时再过滤即可。
+    logs[date]=(arr||[]).map(x=>({
       id:x.id||uid(),
       name:x.name||"未命名事项",
       cat:x.cat||"fragment",
       mins:Number(x.mins)||30,
       note:x.note||"",
       projectId:x.projectId||null,
+      sourceTaskId:x.sourceTaskId||null,
       createdAt:x.createdAt||date,
       updatedAt:x.updatedAt||x.id||nowTs(),
+      _deleted:!!x._deleted,
     }));
   }
   let normalized={
@@ -500,7 +508,8 @@ function LogTab({data,save}){
   const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState(""); const [linkedTaskId,setLinkedTaskId]=useState("");
   const [edit,setEdit]=useState(null); const [dailyNote,setDailyNote]=useState(data.dailyNotes?.[selDate]||""); const [exportOpen,setExportOpen]=useState(false);
   useEffect(()=>{setDailyNote(data.dailyNotes?.[selDate]||"")},[selDate,data.dailyNotes]);
-  const entries=(data.logs[selDate]||[]).filter(e=>!e._deleted);
+  const rawEntries=data.logs[selDate]||[];
+  const entries=rawEntries.filter(e=>!e._deleted);
   const activeTasks=(data.tasks||[]).filter(t=>!t._deleted && !["done","dropped"].includes(t.status));
   const total=entries.reduce((s,e)=>s+Number(e.mins||0),0);
   const createProjectForLog=(projectName,assignToEdit=false)=>{
@@ -516,17 +525,28 @@ function LogTab({data,save}){
     if(!finalName)return;
     const logId=uid();
     const finalProjectId=projectId || linkedTask?.projectId || null;
-    const e={id:logId,name:finalName,cat,mins:Number(mins),note:note.trim(),projectId:finalProjectId,sourceTaskId:linkedTaskId||null,createdAt:selDate,updatedAt:nowTs()};
-    const newLogs={...data.logs,[selDate]:[...entries,e]};
+    const e={id:logId,name:finalName,cat,mins:Number(mins),note:note.trim(),projectId:finalProjectId,sourceTaskId:linkedTaskId||null,createdAt:selDate,updatedAt:nowTs(),_deleted:false};
+    const newLogs={...data.logs,[selDate]:[...rawEntries,e]};
     let newTasks=data.tasks||[];
     if(linkedTaskId){
-      newTasks=newTasks.map(t=>String(t.id)===String(linkedTaskId)?{...t,status:"done",doneAt:selDate,loggedLogRef:{date:selDate,entryId:logId},updatedAt:nowTs()}:t);
+      newTasks=newTasks.map(t=>{
+        if(String(t.id)!==String(linkedTaskId)) return t;
+        const shouldBackfillProject=finalProjectId && !t.projectId;
+        return {
+          ...t,
+          status:"done",
+          doneAt:selDate,
+          projectId:shouldBackfillProject?finalProjectId:t.projectId,
+          loggedLogRef:{date:selDate,entryId:logId},
+          updatedAt:nowTs()
+        };
+      });
     }
     save({...data,logs:newLogs,tasks:newTasks});
     setName("");setNote("");setMins(30);setProjectId("");setLinkedTaskId("");
   };
-  const remove=id=>save({...data,logs:{...data.logs,[selDate]:softDelete(entries,id)}});
-  const saveEdit=()=>{if(!edit)return; save({...data,logs:{...data.logs,[selDate]:entries.map(e=>String(e.id)===String(edit.id)?{...edit,updatedAt:nowTs()}:e)}});setEdit(null)};
+  const remove=id=>save({...data,logs:{...data.logs,[selDate]:softDelete(rawEntries,id)}});
+  const saveEdit=()=>{if(!edit)return; save({...data,logs:{...data.logs,[selDate]:rawEntries.map(e=>String(e.id)===String(edit.id)?{...edit,updatedAt:nowTs()}:e)}});setEdit(null)};
   const saveDaily=()=>save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
   const selectedLinkedTask=activeTasks.find(t=>String(t.id)===String(linkedTaskId));
   const chooseLinkedTask=(id)=>{
