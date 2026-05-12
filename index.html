@@ -100,12 +100,23 @@ function mergeLogs(local={}, remote={}){
   return out;
 }
 function softDelete(arr,id){return (arr||[]).map(i=>String(i.id)===String(id)?{...i,_deleted:true,updatedAt:nowTs()}:i)}
+function reassignProjectRefs(data,fromId,toId){
+  // 合并项目时，把所有引用 fromId 的待办/日志/知识改到 toId。
+  return {
+    ...data,
+    tasks:(data.tasks||[]).map(t=>String(t.projectId)===String(fromId)?{...t,projectId:toId,updatedAt:nowTs()}:t),
+    logs:Object.fromEntries(Object.entries(data.logs||{}).map(([d,arr])=>[d,(arr||[]).map(e=>String(e.projectId)===String(fromId)?{...e,projectId:toId,updatedAt:nowTs()}:e)])),
+    knowledge:{domains:(data.knowledge?.domains||[]).map(dom=>({...dom,themes:(dom.themes||[]).map(th=>({...th,entries:(th.entries||[]).map(e=>String(e.projectId)===String(fromId)?{...e,projectId:toId,updatedAt:nowTs()}:e)}))}))}
+  };
+}
 function ensureDefaultProjects(projects){
+  // 只在完全没有项目时提供一组初始项目。
+  // 已有旧数据时不再强行塞入默认项目，避免「年度预算更新」和
+  // 「年度预算与经营分析体系」这类语义重复项目堆在一起。
   const arr=[...(projects||[])];
+  if(arr.filter(x=>!x._deleted).length>0) return arr;
   for(const p of DEFAULT_PROJECTS){
-    if(!arr.some(x=>x.name===p.name)){
-      arr.push({id:uid(),name:p.name,type:p.type,status:"active",goal:p.goal,currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()});
-    }
+    arr.push({id:uid(),name:p.name,type:p.type,status:"active",goal:p.goal,currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()});
   }
   return arr;
 }
@@ -510,6 +521,16 @@ function ProjectsTab({data,save}){
       knowledge:{domains:(data.knowledge?.domains||[]).map(dom=>({...dom,themes:(dom.themes||[]).map(th=>({...th,entries:(th.entries||[]).map(e=>String(e.projectId)===String(id)?{...e,projectId:null,updatedAt:nowTs()}:e)}))}))}
     });
   };
+  const mergeProject=(fromId,toId)=>{
+    if(!fromId||!toId||String(fromId)===String(toId))return;
+    const from=projects.find(x=>String(x.id)===String(fromId));
+    const to=projects.find(x=>String(x.id)===String(toId));
+    if(!from||!to)return;
+    if(!confirm(`把「${from.name}」合并到「${to.name}」？\n相关待办、日志、知识都会改到目标项目，原项目会被删除。`))return;
+    const moved=reassignProjectRefs(data,fromId,toId);
+    save({...moved,projects:softDelete((moved.projects||projects),fromId)});
+    setSelected(toId);
+  };
   const restore=id=>save({...data,projects:projects.map(x=>String(x.id)===String(id)?{...x,_deleted:false,status:x.status||"active",updatedAt:nowTs()}:x)});
   const relatedFor=proj=>{
     if(!proj)return {tasks:[],logs:[],knowledge:[]};
@@ -552,7 +573,7 @@ function ProjectsTab({data,save}){
     </div>
 
     {mode==="organize"&&<div style={S.card}>
-      <CardTitle sub="这里就是整理项目的地方：改名、改类型、暂停/归档、删除。删除只会解除关联，不会删除日志/待办/知识。">整理项目</CardTitle>
+      <CardTitle sub="这里就是整理项目的地方：改名、改类型、暂停/归档、合并、删除。重复项目建议用「合并到」而不是直接删。">整理项目</CardTitle>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
         <div style={{fontSize:12,color:"#9ca3af"}}>当前显示 {organizeProjects.filter(x=>showArchived||!x._deleted).length} 个项目</div>
         <button style={S.btnSm(showArchived?"#111827":"#f3f4f6",showArchived?"#fff":"#374151")} onClick={()=>setShowArchived(v=>!v)}>{showArchived?"隐藏已删除":"显示已删除"}</button>
@@ -582,6 +603,13 @@ function ProjectsTab({data,save}){
               {isDeleted?<button style={S.btnSm("#059669","#fff")} onClick={()=>restore(proj.id)}>恢复</button>:<button style={S.btnSm("#dc2626","#fff")} onClick={()=>remove(proj.id)}>删除</button>}
             </div>
           </div>
+          {!isDeleted&&<div style={{display:"flex",gap:6,alignItems:"center",marginTop:8,paddingTop:8,borderTop:"1px solid #e5e7eb"}}>
+            <span style={{fontSize:11,color:"#9ca3af",whiteSpace:"nowrap"}}>合并到</span>
+            <select style={{...S.select,flex:1,padding:"7px 8px"}} defaultValue="" onChange={e=>{const toId=e.target.value; if(toId){mergeProject(proj.id,toId); e.target.value="";}}}>
+              <option value="">选择目标项目…</option>
+              {visibleProjects.filter(x=>String(x.id)!==String(proj.id)).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </div>}
           {open&&!isDeleted&&<div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #e5e7eb"}}><ProjectEditFields proj={proj} inline={true}/></div>}
         </div>
       })}
