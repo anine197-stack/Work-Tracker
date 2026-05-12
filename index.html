@@ -208,6 +208,8 @@ function normalizeTask(t){
     value:t.value,
     urgency:t.urgency,
     source:t.source||"manual",
+    loggedLogRef:t.loggedLogRef||null,
+    doneAt:t.doneAt||null,
     createdAt:t.createdAt||t.created||today(),
     updatedAt:t.updatedAt||t.id||nowTs(),
     _deleted:!!t._deleted,
@@ -495,10 +497,11 @@ function App(){
 
 function LogTab({data,save}){
   const [selDate,setSelDate]=useState(today());
-  const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState("");
+  const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState(""); const [linkedTaskId,setLinkedTaskId]=useState("");
   const [edit,setEdit]=useState(null); const [dailyNote,setDailyNote]=useState(data.dailyNotes?.[selDate]||""); const [exportOpen,setExportOpen]=useState(false);
   useEffect(()=>{setDailyNote(data.dailyNotes?.[selDate]||"")},[selDate,data.dailyNotes]);
   const entries=(data.logs[selDate]||[]).filter(e=>!e._deleted);
+  const activeTasks=(data.tasks||[]).filter(t=>!t._deleted && !["done","dropped"].includes(t.status));
   const total=entries.reduce((s,e)=>s+Number(e.mins||0),0);
   const createProjectForLog=(projectName,assignToEdit=false)=>{
     const np={id:uid(),name:projectName,type:"支持",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()};
@@ -507,17 +510,51 @@ function LogTab({data,save}){
     return np.id;
   };
   const shift=d=>{const dt=new Date(selDate);dt.setDate(dt.getDate()+d);setSelDate(dt.toISOString().slice(0,10));};
-  const add=()=>{if(!name.trim())return; const e={id:uid(),name:name.trim(),cat,mins:Number(mins),note:note.trim(),projectId:projectId||null,createdAt:selDate,updatedAt:nowTs()}; save({...data,logs:{...data.logs,[selDate]:[...entries,e]}}); setName("");setNote("");setMins(30);};
+  const add=()=>{
+    const linkedTask=activeTasks.find(t=>String(t.id)===String(linkedTaskId));
+    const finalName=(name.trim() || linkedTask?.title || "").trim();
+    if(!finalName)return;
+    const logId=uid();
+    const finalProjectId=projectId || linkedTask?.projectId || null;
+    const e={id:logId,name:finalName,cat,mins:Number(mins),note:note.trim(),projectId:finalProjectId,sourceTaskId:linkedTaskId||null,createdAt:selDate,updatedAt:nowTs()};
+    const newLogs={...data.logs,[selDate]:[...entries,e]};
+    let newTasks=data.tasks||[];
+    if(linkedTaskId){
+      newTasks=newTasks.map(t=>String(t.id)===String(linkedTaskId)?{...t,status:"done",doneAt:selDate,loggedLogRef:{date:selDate,entryId:logId},updatedAt:nowTs()}:t);
+    }
+    save({...data,logs:newLogs,tasks:newTasks});
+    setName("");setNote("");setMins(30);setProjectId("");setLinkedTaskId("");
+  };
   const remove=id=>save({...data,logs:{...data.logs,[selDate]:softDelete(entries,id)}});
   const saveEdit=()=>{if(!edit)return; save({...data,logs:{...data.logs,[selDate]:entries.map(e=>String(e.id)===String(edit.id)?{...edit,updatedAt:nowTs()}:e)}});setEdit(null)};
   const saveDaily=()=>save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
+  const selectedLinkedTask=activeTasks.find(t=>String(t.id)===String(linkedTaskId));
+  const chooseLinkedTask=(id)=>{
+    setLinkedTaskId(id);
+    const t=activeTasks.find(x=>String(x.id)===String(id));
+    if(t){
+      setName(t.title||"");
+      if(t.projectId) setProjectId(String(t.projectId));
+      if(!note.trim()&&t.note) setNote(t.note);
+    }
+  };
   return <>
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:14}}>
       <button style={S.btnSm()} onClick={()=>shift(-1)}>◀</button><span style={{fontSize:15,fontWeight:800,minWidth:92,textAlign:"center"}}>{shortDate(selDate)}</span><button style={S.btnSm()} onClick={()=>shift(1)}>▶</button>{selDate!==today()&&<button style={S.btnSm("#2563eb","#fff")} onClick={()=>setSelDate(today())}>今天</button>}
     </div>
     <div style={S.card}>
-      <CardTitle sub="记录今天做了什么。项目可选，不要为了分类打断记录。">添加事项</CardTitle>
-      <input style={{...S.input,marginBottom:8}} placeholder="做了什么？" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/>
+      <CardTitle sub="记录今天做了什么。可直接输入，也可在右侧下拉选择待办池事项；添加记录后，关联待办会自动标记完成。">添加事项</CardTitle>
+      <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"stretch"}}>
+        <input style={{...S.input,flex:1,minWidth:0}} placeholder="做了什么？" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/>
+        <select title="从待办池选择" style={{...S.select,flex:"0 0 150px"}} value={linkedTaskId} onChange={e=>chooseLinkedTask(e.target.value)}>
+          <option value="">选待办</option>
+          {activeTasks.map(t=>{const p=activeProjects(data.projects).find(x=>String(x.id)===String(t.projectId)); const s=statusDef(t.status); return <option key={t.id} value={t.id}>{`[${s.label}] ${p?`【${p.name}】 `:""}${t.title}`}</option>})}
+        </select>
+      </div>
+      {selectedLinkedTask&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,fontSize:11,color:"#059669",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:8,padding:"6px 8px",marginBottom:8}}>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>已关联待办：{selectedLinkedTask.title}</span>
+        <button style={S.btnSm("#f0fdf4","#047857")} onClick={()=>setLinkedTaskId("")}>取消</button>
+      </div>}
       <div style={{...S.row,marginBottom:8}}>
         <select style={{...S.select,flex:1.2}} value={cat} onChange={e=>setCat(e.target.value)}>{CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select>
         <select style={{...S.select,flex:"0 0 88px"}} value={mins} onChange={e=>setMins(Number(e.target.value))}>{[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{fmtMins(m)}</option>)}</select>
@@ -551,13 +588,32 @@ function TasksTab({data,save}){
   const addQuick=()=>{if(!quick.trim())return; const t={id:uid(),title:quick.trim(),status:"inbox",projectId:null,nextAction:"",waitingFor:"",note:"",due:null,pinned:false,source:"manual",createdAt:today(),updatedAt:nowTs()}; save({...data,tasks:[t,...tasks]}); setQuick("");};
   const updateTask=(id,patch)=>save({...data,tasks:tasks.map(t=>String(t.id)===String(id)?{...t,...patch,updatedAt:nowTs()}:t)});
   const removeTask=id=>save({...data,tasks:softDelete(tasks,id)});
+  const completeTaskWithLog=(task,logDraft)=>{
+    const date=logDraft.date||today();
+    const logId=uid();
+    const entry={
+      id:logId,
+      name:(logDraft.name||task.title||"未命名事项").trim(),
+      cat:logDraft.cat||"routine",
+      mins:Number(logDraft.mins)||30,
+      note:(logDraft.note||"").trim(),
+      projectId:task.projectId||null,
+      createdAt:date,
+      updatedAt:nowTs(),
+      sourceTaskId:task.id,
+    };
+    const newTasks=tasks.map(t=>String(t.id)===String(task.id)?{...t,status:"done",doneAt:date,loggedLogRef:{date,entryId:logId},updatedAt:nowTs()}:t);
+    const newLogs={...(data.logs||{}),[date]:[...((data.logs||{})[date]||[]),entry]};
+    save({...data,tasks:newTasks,logs:newLogs});
+    setLogTask(null);
+  };
   const inbox=tasks.filter(t=>t.status==="inbox");
   const counts=Object.fromEntries(TASK_STATUS.map(s=>[s.key,tasks.filter(t=>t.status===s.key).length]));
   const sorted=arr=>[...arr].sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0)||String(a.due||"9999").localeCompare(String(b.due||"9999"))||(b.updatedAt||0)-(a.updatedAt||0));
   const openOrganize=()=>setOrganize(inbox[0]?{...inbox[0]}:null);
   const saveOrganize=(status)=>{if(!organize)return; updateTask(organize.id,{...organize,status}); const rest=inbox.filter(t=>String(t.id)!==String(organize.id)); setOrganize(rest[0]?{...rest[0]}:null);};
   const TaskCard=({task})=>{const p=projects.find(x=>String(x.id)===String(task.projectId)); const s=statusDef(task.status); return <div style={{padding:"10px 12px",background:"#f9fafb",borderRadius:9,marginBottom:7,borderLeft:`3px solid ${s.color}`}}>
-    <div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:700}}>{task.title}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:4}}><StatusPill status={task.status}/>{p&&<span style={{marginLeft:4}}>{p.name}</span>}{task.due&&<span style={{marginLeft:6,color:task.due<=today()?"#dc2626":"#6b7280"}}>截止：{task.due}</span>}</div>{task.nextAction&&<div style={{fontSize:12,color:"#4b5563",marginTop:6}}>下一步：{task.nextAction}</div>}{task.waitingFor&&<div style={{fontSize:12,color:"#d97706",marginTop:4}}>等待：{task.waitingFor}</div>}{task.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,whiteSpace:"pre-wrap"}}>{task.note}</div>}</div><div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button style={S.btnSm("#f59e0b","#fff")} onClick={()=>setEdit({...task})}>✎</button>{task.status!=="today"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"today"})}>今天</button>}{task.status!=="next"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"next"})}>近期</button>}{task.status!=="waiting"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"waiting"})}>等待</button>}<button style={S.btnSm("#059669","#fff")} onClick={()=>updateTask(task.id,{status:"done"})}>✓</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>removeTask(task.id)}>删</button></div></div>
+    <div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:700}}>{task.title}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:4}}><StatusPill status={task.status}/>{p&&<span style={{marginLeft:4}}>{p.name}</span>}{task.due&&<span style={{marginLeft:6,color:task.due<=today()?"#dc2626":"#6b7280"}}>截止：{task.due}</span>}</div>{task.nextAction&&<div style={{fontSize:12,color:"#4b5563",marginTop:6}}>下一步：{task.nextAction}</div>}{task.waitingFor&&<div style={{fontSize:12,color:"#d97706",marginTop:4}}>等待：{task.waitingFor}</div>}{task.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,whiteSpace:"pre-wrap"}}>{task.note}</div>}</div><div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button style={S.btnSm("#f59e0b","#fff")} onClick={()=>setEdit({...task})}>✎</button>{task.loggedLogRef&&<span style={{fontSize:11,color:"#059669",alignSelf:"center"}}>已记</span>}{task.status!=="today"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"today"})}>今天</button>}{task.status!=="next"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"next"})}>近期</button>}{task.status!=="waiting"&&<button style={S.btnSm()} onClick={()=>updateTask(task.id,{status:"waiting"})}>等待</button>}<button style={S.btnSm("#059669","#fff")} onClick={()=>updateTask(task.id,{status:"done"})}>✓</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>removeTask(task.id)}>删</button></div></div>
   </div>};
   const Section=({status})=>{const s=statusDef(status); const arr=sorted(tasks.filter(t=>t.status===status)); if(!arr.length&&status!=="inbox")return null; return <div style={{marginBottom:16}}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}><div style={{fontSize:14,fontWeight:850,color:"#111827"}}>{s.label} <span style={{color:"#9ca3af",fontSize:12}}>{arr.length}</span></div>{status==="inbox"&&arr.length>0&&<button style={S.btnSm("#2563eb","#fff")} onClick={openOrganize}>整理收件箱</button>}</div>{arr.length?arr.map(t=><TaskCard key={t.id} task={t}/>):<div style={{textAlign:"center",fontSize:12,color:"#9ca3af",padding:18,background:"#f9fafb",borderRadius:9}}>收件箱为空</div>}</div>};
   return <>
@@ -572,6 +628,30 @@ function TasksTab({data,save}){
     {edit&&<TaskEditModal task={edit} setTask={setEdit} projects={projects} onSave={()=>{updateTask(edit.id,edit);setEdit(null)}} onDelete={()=>{removeTask(edit.id);setEdit(null)}} onClose={()=>setEdit(null)}/>} 
   </>
 }
+
+function TaskToLogModal({task,projects,onSave,onClose}){
+  const [draft,setDraft]=useState({date:today(),name:task.title||"",cat:"routine",mins:30,note:task.note||""});
+  const p=projects.find(x=>String(x.id)===String(task.projectId));
+  return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}>
+    <CardTitle sub="把这个待办直接转成今日记录，并把待办标记为已完成。以后同一件事就不用在待办池和每日记录里手动记两遍。">完成并记录</CardTitle>
+    <label style={S.label}>记录名称</label>
+    <input style={{...S.input,marginBottom:10}} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/>
+    <div style={{...S.row,marginBottom:10}}>
+      <div style={{flex:1}}><label style={S.label}>日期</label><input type="date" style={S.input} value={draft.date} onChange={e=>setDraft({...draft,date:e.target.value})}/></div>
+      <div style={{flex:1}}><label style={S.label}>耗时</label><select style={S.select} value={draft.mins} onChange={e=>setDraft({...draft,mins:Number(e.target.value)})}>{[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{fmtMins(m)}</option>)}</select></div>
+    </div>
+    <label style={S.label}>记录分类</label>
+    <select style={{...S.select,marginBottom:10}} value={draft.cat} onChange={e=>setDraft({...draft,cat:e.target.value})}>{CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select>
+    <div style={{fontSize:12,color:"#6b7280",background:"#f9fafb",borderRadius:8,padding:"8px 10px",marginBottom:10}}>项目归属：{p?p.name:"无归属项目"}</div>
+    <label style={S.label}>备注</label>
+    <textarea style={{...S.textarea,marginBottom:12}} value={draft.note} onChange={e=>setDraft({...draft,note:e.target.value})} placeholder="可补充实际做了什么、卡点、判断。"/>
+    <div style={{display:"flex",gap:8}}>
+      <button style={{...S.btn("#059669"),flex:1}} onClick={()=>onSave(draft)}>保存记录并完成</button>
+      <button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button>
+    </div>
+  </div></div>
+}
+
 function TaskProjectOrganizeModal({tasks,projects,onAssign,onClose}){
   const [selected,setSelected]=useState(()=>Object.fromEntries((tasks||[]).map(t=>[String(t.id),true])));
   const [target,setTarget]=useState(projects[0]?.id||"");
