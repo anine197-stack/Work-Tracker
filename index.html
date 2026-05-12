@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>WORK TRACKER V3</title>
+<title>THE TRACKER</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -384,7 +384,7 @@ function App(){
   const syncLabel={unconfigured:"未同步",syncing:"同步中…",synced:"已同步",error:"同步失败"}[syncStatus];
   return <div style={S.app}>
     <div style={{textAlign:"center",marginBottom:18}}>
-      <div style={{fontSize:16,fontWeight:900,letterSpacing:1}}>WORK TRACKER</div>
+      <div style={{fontSize:16,fontWeight:900,letterSpacing:1}}>THE TRACKER</div>
       <div style={{fontSize:11,color:"#9ca3af",marginTop:4,display:"flex",justifyContent:"center",gap:6,alignItems:"center"}}>
         工作日志 · 待办池 · 项目档案 · 知识库
         <span style={{display:"inline-flex",alignItems:"center",gap:3,color:syncColor}}><span style={{width:6,height:6,borderRadius:"50%",background:syncColor,display:"inline-block"}}/>{syncLabel}{lastSynced&&syncStatus==="synced"&&<span style={{color:"#9ca3af"}}>· {lastSynced}</span>}</span>
@@ -402,7 +402,7 @@ function App(){
     {tab==="projects"&&<ProjectsTab data={data} save={save}/>} 
     {tab==="knowledge"&&<KnowledgeTab data={data} save={save}/>} 
     {tab==="settings"&&<SettingsTab data={data} save={save} ghToken={ghToken} setGhToken={setGhToken} ghGistId={ghGistId} encPwd={encPwd} setEncPwd={setEncPwd} syncStatus={syncStatus} syncMsg={syncMsg} isConfigured={isConfigured} manualSync={manualSync} connectGist={connectGist} disconnect={disconnect}/>} 
-    <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>V3 · 项目层 + 低摩擦待办池 + 双索引知识库</div>
+    <div style={{textAlign:"center",padding:"12px 0 4px",fontSize:11,color:"#d1d5db"}}>THE TRACKER · 项目层 + 低摩擦待办池 + 双索引知识库</div>
   </div>;
 }
 
@@ -481,16 +481,128 @@ function OrganizeModal({task,setTask,projects,onSave,onClose,remaining}){return 
 function TaskEditModal({task,setTask,projects,onSave,onDelete,onClose}){return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>编辑待办</CardTitle><label style={S.label}>标题</label><input style={{...S.input,marginBottom:10}} value={task.title} onChange={e=>setTask({...task,title:e.target.value})}/><label style={S.label}>状态</label><select style={{...S.select,marginBottom:10}} value={task.status} onChange={e=>setTask({...task,status:e.target.value})}>{TASK_STATUS.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select><label style={S.label}>项目</label><div style={{marginBottom:10}}><ProjectSelect projects={projects} value={task.projectId} onChange={v=>setTask({...task,projectId:v})}/></div><label style={S.label}>下一步</label><input style={{...S.input,marginBottom:10}} value={task.nextAction||""} onChange={e=>setTask({...task,nextAction:e.target.value})}/><label style={S.label}>等待对象</label><input style={{...S.input,marginBottom:10}} value={task.waitingFor||""} onChange={e=>setTask({...task,waitingFor:e.target.value})}/><label style={S.label}>截止日</label><input type="date" style={{...S.input,marginBottom:10}} value={task.due||""} onChange={e=>setTask({...task,due:e.target.value||null})}/><label style={S.label}>备注</label><textarea style={{...S.textarea,marginBottom:12}} value={task.note||""} onChange={e=>setTask({...task,note:e.target.value})}/><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={onSave}>保存</button><button style={{...S.btn("#dc2626"),flex:1}} onClick={onDelete}>删除</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
 
 function ProjectsTab({data,save}){
-  const visibleProjects=activeProjects(data.projects);
-  const [selected,setSelected]=useState(visibleProjects[0]?.id||null); const [newName,setNewName]=useState("");
-  const projects=data.projects||[]; const p=visibleProjects.find(x=>String(x.id)===String(selected))||visibleProjects[0];
+  const projects=data.projects||[];
+  const visibleProjects=activeProjects(projects);
+  const [selected,setSelected]=useState(visibleProjects[0]?.id||null);
+  const [newName,setNewName]=useState("");
+  const [mode,setMode]=useState("detail");
+  const [editing,setEditing]=useState(null);
+  const [showArchived,setShowArchived]=useState(false);
+
+  const p=visibleProjects.find(x=>String(x.id)===String(selected))||visibleProjects[0];
+  const statusLabel=key=>PROJECT_STATUS.find(s=>s.key===key)?.label||key;
+  const statusColor=key=>({active:"#059669",paused:"#d97706",done:"#2563eb",archived:"#64748b"}[key]||"#64748b");
   const updateProject=(id,patch)=>save({...data,projects:projects.map(x=>String(x.id)===String(id)?{...x,...patch,updatedAt:nowTs()}:x)});
-  const add=()=>{if(!newName.trim())return; const np={id:uid(),name:newName.trim(),type:"主线",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()}; save({...data,projects:[np,...projects]}); setSelected(np.id); setNewName("");};
-  const remove=id=>{if(!confirm("确定删除/归档这个项目？相关日志、待办、知识不会删除，只会变成无归属。"))return; const nextVisible=visibleProjects.find(x=>String(x.id)!==String(id)); setSelected(nextVisible?.id||null); save({...data,projects:softDelete(projects,id),tasks:(data.tasks||[]).map(t=>String(t.projectId)===String(id)?{...t,projectId:null,updatedAt:nowTs()}:t),logs:Object.fromEntries(Object.entries(data.logs||{}).map(([d,arr])=>[d,(arr||[]).map(e=>String(e.projectId)===String(id)?{...e,projectId:null,updatedAt:nowTs()}:e)])),knowledge:{domains:(data.knowledge?.domains||[]).map(dom=>({...dom,themes:(dom.themes||[]).map(th=>({...th,entries:(th.entries||[]).map(e=>String(e.projectId)===String(id)?{...e,projectId:null,updatedAt:nowTs()}:e)}))}))}})};
-  const relatedTasks=(data.tasks||[]).filter(t=>p&&String(t.projectId)===String(p.id)&&!["done","dropped"].includes(t.status));
-  const relatedLogs=[]; if(p){for(const [d,arr] of Object.entries(data.logs||{})){for(const e of arr){if(String(e.projectId)===String(p.id)) relatedLogs.push({...e,date:d})}}}
-  const relatedKnowledge=[]; if(p){for(const dom of data.knowledge.domains||[]){for(const th of dom.themes||[]){for(const e of th.entries||[]){if(String(e.projectId)===String(p.id)) relatedKnowledge.push({...e,themeName:th.name,domainId:dom.id})}}}}
-  return <div style={S.card}><CardTitle sub="项目不是待办清单，而是长期主线档案：目标、当前状态、下一步，以及相关待办/日志/知识。">项目</CardTitle><div style={{display:"flex",gap:8,marginBottom:12}}><input style={S.input} placeholder="新建项目" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/><button style={S.btn()} onClick={add}>+</button></div><div style={{display:"flex",gap:8,overflowX:"auto",marginBottom:14,paddingBottom:4}}>{visibleProjects.map(x=><button key={x.id} style={S.btnSm(String(p?.id)===String(x.id)?"#2563eb":"#f3f4f6",String(p?.id)===String(x.id)?"#fff":"#374151")} onClick={()=>setSelected(x.id)}>{x.name}</button>)}</div>{p&&<div><div style={{padding:12,background:"#f9fafb",borderRadius:10,marginBottom:12}}><label style={S.label}>项目名称</label><input style={{...S.input,marginBottom:8}} value={p.name} onChange={e=>updateProject(p.id,{name:e.target.value})}/><div style={{...S.row,marginBottom:8}}><select style={S.select} value={p.type} onChange={e=>updateProject(p.id,{type:e.target.value})}>{PROJECT_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select><select style={S.select} value={p.status} onChange={e=>updateProject(p.id,{status:e.target.value})}>{PROJECT_STATUS.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select></div><label style={S.label}>目标</label><textarea style={{...S.textarea,marginBottom:8}} value={p.goal||""} onChange={e=>updateProject(p.id,{goal:e.target.value})}/><label style={S.label}>当前状态</label><textarea style={{...S.textarea,marginBottom:8}} value={p.currentState||""} onChange={e=>updateProject(p.id,{currentState:e.target.value})}/><label style={S.label}>下一步</label><textarea style={{...S.textarea,marginBottom:8}} value={p.nextAction||""} onChange={e=>updateProject(p.id,{nextAction:e.target.value})}/><button style={S.btnSm("#dc2626","#fff")} onClick={()=>remove(p.id)}>删除/归档项目</button></div><RelSection title="相关待办" empty="暂无相关待办">{relatedTasks.map(t=><div key={t.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><StatusPill status={t.status}/> {t.title}</div>)}</RelSection><RelSection title="相关日志" empty="暂无相关日志">{relatedLogs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,20).map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>{e.date} · {e.name} · {fmtMins(e.mins)}</div>)}</RelSection><RelSection title="相关知识" empty="暂无相关知识">{relatedKnowledge.map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><b>{e.title||e.themeName}</b><div style={{fontSize:12,color:"#6b7280",marginTop:3}}>{e.entryType} · {e.confidence}</div></div>)}</RelSection></div>}</div>}
+  const add=()=>{
+    if(!newName.trim())return;
+    const np={id:uid(),name:newName.trim(),type:"主线",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()};
+    save({...data,projects:[np,...projects]});
+    setSelected(np.id); setNewName(""); setMode("detail");
+  };
+  const remove=id=>{
+    if(!confirm("确定删除这个项目？相关日志、待办、知识不会删除，只会变成无归属。"))return;
+    const nextVisible=visibleProjects.find(x=>String(x.id)!==String(id));
+    setSelected(nextVisible?.id||null);
+    save({...data,
+      projects:softDelete(projects,id),
+      tasks:(data.tasks||[]).map(t=>String(t.projectId)===String(id)?{...t,projectId:null,updatedAt:nowTs()}:t),
+      logs:Object.fromEntries(Object.entries(data.logs||{}).map(([d,arr])=>[d,(arr||[]).map(e=>String(e.projectId)===String(id)?{...e,projectId:null,updatedAt:nowTs()}:e)])),
+      knowledge:{domains:(data.knowledge?.domains||[]).map(dom=>({...dom,themes:(dom.themes||[]).map(th=>({...th,entries:(th.entries||[]).map(e=>String(e.projectId)===String(id)?{...e,projectId:null,updatedAt:nowTs()}:e)}))}))}
+    });
+  };
+  const restore=id=>save({...data,projects:projects.map(x=>String(x.id)===String(id)?{...x,_deleted:false,status:x.status||"active",updatedAt:nowTs()}:x)});
+  const relatedFor=proj=>{
+    if(!proj)return {tasks:[],logs:[],knowledge:[]};
+    const tasks=(data.tasks||[]).filter(t=>String(t.projectId)===String(proj.id)&&!["done","dropped"].includes(t.status));
+    const logs=[];
+    for(const [d,arr] of Object.entries(data.logs||{})){for(const e of arr||[]){if(String(e.projectId)===String(proj.id)) logs.push({...e,date:d})}}
+    const knowledge=[];
+    for(const dom of data.knowledge?.domains||[]){for(const th of dom.themes||[]){for(const e of th.entries||[]){if(String(e.projectId)===String(proj.id)&&!e._deleted) knowledge.push({...e,themeName:th.name,domainId:dom.id})}}}
+    return {tasks,logs,knowledge};
+  };
+  const related=relatedFor(p);
+  const organizeProjects=(showArchived?projects:visibleProjects).filter(x=>showArchived?!false:!x._deleted);
+
+  const ProjectEditFields=({proj,inline=false})=> proj&&<div style={{padding:inline?0:12,background:inline?"transparent":"#f9fafb",borderRadius:10,marginBottom:inline?0:12}}>
+    <label style={S.label}>项目名称</label>
+    <input style={{...S.input,marginBottom:8}} value={proj.name} onChange={e=>updateProject(proj.id,{name:e.target.value})}/>
+    <div style={{...S.row,marginBottom:8}}>
+      <select style={S.select} value={proj.type} onChange={e=>updateProject(proj.id,{type:e.target.value})}>{PROJECT_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select>
+      <select style={S.select} value={proj.status} onChange={e=>updateProject(proj.id,{status:e.target.value})}>{PROJECT_STATUS.map(x=><option key={x.key} value={x.key}>{x.label}</option>)}</select>
+    </div>
+    <label style={S.label}>目标</label>
+    <textarea style={{...S.textarea,marginBottom:8}} value={proj.goal||""} onChange={e=>updateProject(proj.id,{goal:e.target.value})}/>
+    <label style={S.label}>当前状态</label>
+    <textarea style={{...S.textarea,marginBottom:8}} value={proj.currentState||""} onChange={e=>updateProject(proj.id,{currentState:e.target.value})}/>
+    <label style={S.label}>下一步</label>
+    <textarea style={{...S.textarea,marginBottom:8}} value={proj.nextAction||""} onChange={e=>updateProject(proj.id,{nextAction:e.target.value})}/>
+  </div>;
+
+  return <>
+    <div style={S.card}>
+      <CardTitle sub="项目用于整理长期主线。先在这里把项目清干净，再去待办池给事项归项目。">项目</CardTitle>
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        <input style={S.input} placeholder="新建项目，例如：电商条线财务闭环" value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/>
+        <button style={S.btn()} onClick={add}>+</button>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        <button style={S.btnSm(mode==="detail"?"#2563eb":"#f3f4f6",mode==="detail"?"#fff":"#374151")} onClick={()=>setMode("detail")}>项目档案</button>
+        <button style={S.btnSm(mode==="organize"?"#2563eb":"#f3f4f6",mode==="organize"?"#fff":"#374151")} onClick={()=>setMode("organize")}>整理项目</button>
+      </div>
+    </div>
+
+    {mode==="organize"&&<div style={S.card}>
+      <CardTitle sub="这里就是整理项目的地方：改名、改类型、暂停/归档、删除。删除只会解除关联，不会删除日志/待办/知识。">整理项目</CardTitle>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
+        <div style={{fontSize:12,color:"#9ca3af"}}>当前显示 {organizeProjects.filter(x=>showArchived||!x._deleted).length} 个项目</div>
+        <button style={S.btnSm(showArchived?"#111827":"#f3f4f6",showArchived?"#fff":"#374151")} onClick={()=>setShowArchived(v=>!v)}>{showArchived?"隐藏已删除":"显示已删除"}</button>
+      </div>
+      {organizeProjects.length===0&&<div style={{fontSize:12,color:"#9ca3af",padding:14,background:"#f9fafb",borderRadius:10}}>暂无项目</div>}
+      {organizeProjects.map(proj=>{
+        const r=relatedFor(proj);
+        const isDeleted=!!proj._deleted;
+        const open=String(editing)===String(proj.id);
+        return <div key={proj.id} style={{padding:"10px 12px",background:isDeleted?"#fafafa":"#f9fafb",border:"1px solid #e5e7eb",borderRadius:10,marginBottom:8,opacity:isDeleted?.55:1}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:850,wordBreak:"break-word"}}>{proj.name}</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:5}}>
+                <span style={S.badge("#475569")}>{proj.type}</span>
+                <span style={S.badge(statusColor(proj.status))}>{statusLabel(proj.status)}</span>
+                <span style={{fontSize:11,color:"#6b7280"}}>待办 {r.tasks.length} · 日志 {r.logs.length} · 知识 {r.knowledge.length}</span>
+                {isDeleted&&<span style={{fontSize:11,color:"#dc2626"}}>已删除</span>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+              {!isDeleted&&<button style={S.btnSm("#2563eb","#fff")} onClick={()=>{setSelected(proj.id);setMode("detail")}}>打开</button>}
+              {!isDeleted&&<button style={S.btnSm("#f59e0b","#fff")} onClick={()=>setEditing(open?null:proj.id)}>{open?"收起":"编辑"}</button>}
+              {!isDeleted&&proj.status!=="paused"&&<button style={S.btnSm()} onClick={()=>updateProject(proj.id,{status:"paused"})}>暂停</button>}
+              {!isDeleted&&proj.status!=="active"&&<button style={S.btnSm("#059669","#fff")} onClick={()=>updateProject(proj.id,{status:"active"})}>推进</button>}
+              {!isDeleted&&proj.status!=="archived"&&<button style={S.btnSm("#64748b","#fff")} onClick={()=>updateProject(proj.id,{status:"archived"})}>归档</button>}
+              {isDeleted?<button style={S.btnSm("#059669","#fff")} onClick={()=>restore(proj.id)}>恢复</button>:<button style={S.btnSm("#dc2626","#fff")} onClick={()=>remove(proj.id)}>删除</button>}
+            </div>
+          </div>
+          {open&&!isDeleted&&<div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #e5e7eb"}}><ProjectEditFields proj={proj} inline={true}/></div>}
+        </div>
+      })}
+    </div>}
+
+    {mode==="detail"&&<div style={S.card}>
+      <CardTitle sub="项目档案页：看某条主线的目标、状态、下一步，以及它关联到的待办/日志/知识。">项目档案</CardTitle>
+      <div style={{display:"flex",gap:8,overflowX:"auto",marginBottom:14,paddingBottom:4}}>
+        {visibleProjects.map(x=><button key={x.id} style={S.btnSm(String(p?.id)===String(x.id)?"#2563eb":"#f3f4f6",String(p?.id)===String(x.id)?"#fff":"#374151")} onClick={()=>setSelected(x.id)}>{x.name}</button>)}
+      </div>
+      {!p&&<div style={{fontSize:12,color:"#9ca3af",padding:14,background:"#f9fafb",borderRadius:10}}>暂无项目。可以先在上方新建一个项目。</div>}
+      {p&&<div>
+        <ProjectEditFields proj={p}/>
+        <button style={{...S.btnSm("#dc2626","#fff"),marginBottom:12}} onClick={()=>remove(p.id)}>删除项目</button>
+        <RelSection title="相关待办" empty="暂无相关待办">{related.tasks.map(t=><div key={t.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><StatusPill status={t.status}/> {t.title}</div>)}</RelSection>
+        <RelSection title="相关日志" empty="暂无相关日志">{related.logs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,20).map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>{e.date} · {e.name} · {fmtMins(e.mins)}</div>)}</RelSection>
+        <RelSection title="相关知识" empty="暂无相关知识">{related.knowledge.map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><b>{e.title||e.themeName}</b><div style={{fontSize:12,color:"#6b7280",marginTop:3}}>{e.entryType} · {e.confidence}</div></div>)}</RelSection>
+      </div>}
+    </div>}
+  </>;
+}
 function RelSection({title,empty,children}){const has=React.Children.count(children)>0; return <div style={{marginTop:12}}><div style={{fontSize:14,fontWeight:850,marginBottom:6}}>{title}</div>{has?<div>{children}</div>:<div style={{fontSize:12,color:"#9ca3af",padding:12,background:"#f9fafb",borderRadius:9}}>{empty}</div>}</div>}
 
 function renderMd(text){
