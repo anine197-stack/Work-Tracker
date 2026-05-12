@@ -209,6 +209,7 @@ function normalizeTask(t){
     urgency:t.urgency,
     source:t.source||"manual",
     loggedLogRef:t.loggedLogRef||null,
+    previousStatusBeforeLog:t.previousStatusBeforeLog||null,
     doneAt:t.doneAt||null,
     createdAt:t.createdAt||t.created||today(),
     updatedAt:t.updatedAt||t.id||nowTs(),
@@ -259,6 +260,9 @@ function normalizeData(input){
       note:x.note||"",
       projectId:x.projectId||null,
       sourceTaskId:x.sourceTaskId||null,
+      extractable:!!x.extractable,
+      extractionStatus:x.extractionStatus||null,
+      extractedEntryId:x.extractedEntryId||null,
       createdAt:x.createdAt||date,
       updatedAt:x.updatedAt||x.id||nowTs(),
       _deleted:!!x._deleted,
@@ -505,7 +509,7 @@ function App(){
 
 function LogTab({data,save}){
   const [selDate,setSelDate]=useState(today());
-  const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState(""); const [linkedTaskId,setLinkedTaskId]=useState("");
+  const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState(""); const [linkedTaskId,setLinkedTaskId]=useState(""); const [extractable,setExtractable]=useState(false);
   const [edit,setEdit]=useState(null); const [dailyNote,setDailyNote]=useState(data.dailyNotes?.[selDate]||""); const [exportOpen,setExportOpen]=useState(false);
   useEffect(()=>{setDailyNote(data.dailyNotes?.[selDate]||"")},[selDate,data.dailyNotes]);
   const rawEntries=data.logs[selDate]||[];
@@ -525,7 +529,7 @@ function LogTab({data,save}){
     if(!finalName)return;
     const logId=uid();
     const finalProjectId=projectId || linkedTask?.projectId || null;
-    const e={id:logId,name:finalName,cat,mins:Number(mins),note:note.trim(),projectId:finalProjectId,sourceTaskId:linkedTaskId||null,createdAt:selDate,updatedAt:nowTs(),_deleted:false};
+    const e={id:logId,name:finalName,cat,mins:Number(mins),note:note.trim(),projectId:finalProjectId,sourceTaskId:linkedTaskId||null,extractable,extractionStatus:null,extractedEntryId:null,createdAt:selDate,updatedAt:nowTs(),_deleted:false};
     const newLogs={...data.logs,[selDate]:[...rawEntries,e]};
     let newTasks=data.tasks||[];
     if(linkedTaskId){
@@ -535,6 +539,7 @@ function LogTab({data,save}){
         return {
           ...t,
           status:"done",
+          previousStatusBeforeLog:t.status||"inbox",
           doneAt:selDate,
           projectId:shouldBackfillProject?finalProjectId:t.projectId,
           loggedLogRef:{date:selDate,entryId:logId},
@@ -543,9 +548,22 @@ function LogTab({data,save}){
       });
     }
     save({...data,logs:newLogs,tasks:newTasks});
-    setName("");setNote("");setMins(30);setProjectId("");setLinkedTaskId("");
+    setName("");setNote("");setMins(30);setProjectId("");setLinkedTaskId("");setExtractable(false);
   };
-  const remove=id=>save({...data,logs:{...data.logs,[selDate]:softDelete(rawEntries,id)}});
+  const remove=id=>{
+    const target=rawEntries.find(e=>String(e.id)===String(id));
+    const newLogs={...data.logs,[selDate]:softDelete(rawEntries,id)};
+    let newTasks=data.tasks||[];
+    if(target?.sourceTaskId){
+      newTasks=newTasks.map(t=>{
+        const ref=t.loggedLogRef;
+        const refMatches=ref&&String(ref.entryId)===String(id)&&String(ref.date)===String(selDate);
+        if(String(t.id)!==String(target.sourceTaskId)||!refMatches) return t;
+        return {...t,status:t.previousStatusBeforeLog||"inbox",doneAt:null,loggedLogRef:null,previousStatusBeforeLog:null,updatedAt:nowTs()};
+      });
+    }
+    save({...data,logs:newLogs,tasks:newTasks});
+  };
   const saveEdit=()=>{if(!edit)return; save({...data,logs:{...data.logs,[selDate]:rawEntries.map(e=>String(e.id)===String(edit.id)?{...edit,updatedAt:nowTs()}:e)}});setEdit(null)};
   const saveDaily=()=>save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
   const selectedLinkedTask=activeTasks.find(t=>String(t.id)===String(linkedTaskId));
@@ -581,6 +599,7 @@ function LogTab({data,save}){
       </div>
       <div style={{marginBottom:8}}><ProjectSelect projects={data.projects} value={projectId} onChange={setProjectId} allowCreate={true} onCreate={name=>createProjectForLog(name,false)}/></div>
       <textarea style={{...S.textarea,marginBottom:8}} placeholder="备注：判断、问题、情绪、风险点、可沉淀内容…" value={note} onChange={e=>setNote(e.target.value)}/>
+      <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#6b7280",marginBottom:8}}><input type="checkbox" checked={extractable} onChange={e=>setExtractable(e.target.checked)}/>有可沉淀信息</label>
       <button style={S.btnFull()} onClick={add}>添加记录</button>
     </div>
     {entries.length>0&&<div style={S.card}>
@@ -590,8 +609,8 @@ function LogTab({data,save}){
         <input style={{...S.input,marginBottom:8}} value={edit.name} onChange={ev=>setEdit({...edit,name:ev.target.value})}/>
         <div style={{...S.row,marginBottom:8}}><select style={S.select} value={edit.cat} onChange={ev=>setEdit({...edit,cat:ev.target.value})}>{CATS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}</select><select style={{...S.select,flex:"0 0 88px"}} value={edit.mins} onChange={ev=>setEdit({...edit,mins:Number(ev.target.value)})}>{[5,10,15,30,45,60,90,120,180,240].map(m=><option key={m} value={m}>{fmtMins(m)}</option>)}</select></div>
         <div style={{marginBottom:8}}><ProjectSelect projects={data.projects} value={edit.projectId} onChange={v=>setEdit({...edit,projectId:v})} allowCreate={true} onCreate={name=>createProjectForLog(name,true)}/></div>
-        <textarea style={{...S.textarea,marginBottom:8}} value={edit.note||""} onChange={ev=>setEdit({...edit,note:ev.target.value})}/><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={saveEdit}>保存</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={()=>setEdit(null)}>取消</button></div>
-      </div>:<div><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:c.color,display:"inline-block",flexShrink:0}}/><span style={{fontSize:13,fontWeight:650}}>{e.name}</span></div><div style={{fontSize:11,color:"#9ca3af",marginTop:4,paddingLeft:16}}>{c.label} · {fmtMins(e.mins)}{p?` · ${p.name}`:""}</div></div><div style={{display:"flex",gap:5,flexShrink:0}}><button style={S.btnSm("#f59e0b","#fff")} onClick={()=>setEdit({...e})}>✎</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>remove(e.id)}>删</button></div></div>{e.note&&<div style={{fontSize:12,color:"#4b5563",marginTop:8,paddingLeft:12,borderLeft:"2px solid #e5e7eb",whiteSpace:"pre-wrap"}}>{e.note}</div>}</div>}</div>})}
+        <textarea style={{...S.textarea,marginBottom:8}} value={edit.note||""} onChange={ev=>setEdit({...edit,note:ev.target.value})}/><label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#6b7280",marginBottom:8}}><input type="checkbox" checked={!!edit.extractable} onChange={ev=>setEdit({...edit,extractable:ev.target.checked,extractionStatus:ev.target.checked?edit.extractionStatus:null})}/>有可沉淀信息</label><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={saveEdit}>保存</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={()=>setEdit(null)}>取消</button></div>
+      </div>:<div><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:c.color,display:"inline-block",flexShrink:0}}/><span style={{fontSize:13,fontWeight:650}}>{e.name}</span></div><div style={{fontSize:11,color:"#9ca3af",marginTop:4,paddingLeft:16}}>{c.label} · {fmtMins(e.mins)}{p?` · ${p.name}`:""}{e.extractable?` · ${e.extractionStatus==="extracted"?"已提炼":e.extractionStatus==="ignored"?"已忽略":"可提炼"}`:""}</div></div><div style={{display:"flex",gap:5,flexShrink:0}}><button style={S.btnSm("#f59e0b","#fff")} onClick={()=>setEdit({...e})}>✎</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>remove(e.id)}>删</button></div></div>{e.note&&<div style={{fontSize:12,color:"#4b5563",marginTop:8,paddingLeft:12,borderLeft:"2px solid #e5e7eb",whiteSpace:"pre-wrap"}}>{e.note}</div>}</div>}</div>})}
       <button style={{...S.btnFull("#f9fafb","#374151"),border:"1px solid #e5e7eb",marginTop:4}} onClick={()=>setExportOpen(true)}>↓ 导出数据</button>
     </div>}
     <div style={S.card}><label style={S.label}>今日状态</label><textarea style={{...S.textarea,minHeight:76,color:"#6b7280"}} placeholder="今天状态怎样？有什么感受或想法…" value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={saveDaily}/></div>
@@ -621,8 +640,12 @@ function TasksTab({data,save}){
       createdAt:date,
       updatedAt:nowTs(),
       sourceTaskId:task.id,
+      extractable:false,
+      extractionStatus:null,
+      extractedEntryId:null,
+      _deleted:false,
     };
-    const newTasks=tasks.map(t=>String(t.id)===String(task.id)?{...t,status:"done",doneAt:date,loggedLogRef:{date,entryId:logId},updatedAt:nowTs()}:t);
+    const newTasks=tasks.map(t=>String(t.id)===String(task.id)?{...t,status:"done",previousStatusBeforeLog:t.status||"inbox",doneAt:date,loggedLogRef:{date,entryId:logId},updatedAt:nowTs()}:t);
     const newLogs={...(data.logs||{}),[date]:[...((data.logs||{})[date]||[]),entry]};
     save({...data,tasks:newTasks,logs:newLogs});
     setLogTask(null);
@@ -851,17 +874,83 @@ function renderMd(text){
   })
 }
 function KnowledgeTab({data,save}){
-  const [view,setView]=useState("topic"); const [search,setSearch]=useState(""); const [addThemeDomain,setAddThemeDomain]=useState(null); const [themeName,setThemeName]=useState(""); const [addEntry,setAddEntry]=useState(null); const [editEntry,setEditEntry]=useState(null);
+  const [view,setView]=useState("topic");
+  const [search,setSearch]=useState("");
+  const [addThemeDomain,setAddThemeDomain]=useState(null);
+  const [themeName,setThemeName]=useState("");
+  const [addEntry,setAddEntry]=useState(null);
+  const [editEntry,setEditEntry]=useState(null);
   const domains=data.knowledge.domains||[];
   const saveKnow=k=>save({...data,knowledge:k});
-  const addTheme=()=>{if(!themeName.trim()||!addThemeDomain)return; const th={id:uid(),name:themeName.trim(),entries:[],updatedAt:nowTs()}; saveKnow({domains:domains.map(d=>d.id===addThemeDomain?{...d,themes:[...(d.themes||[]),th]}:d)}); setThemeName("");setAddThemeDomain(null);};
+  const addTheme=()=>{if(!themeName.trim()||!addThemeDomain)return; const th={id:uid(),name:themeName.trim(),entries:[],updatedAt:nowTs(),_deleted:false}; saveKnow({domains:domains.map(d=>d.id===addThemeDomain?{...d,themes:[...(d.themes||[]),th]}:d)}); setThemeName("");setAddThemeDomain(null);};
   const removeTheme=(domainId,themeId)=>saveKnow({domains:domains.map(d=>d.id===domainId?{...d,themes:softDelete(d.themes,themeId)}:d)});
-  const addEntrySave=(entry)=>{const e={...entry,id:uid(),createdAt:today(),updatedAt:nowTs()}; saveKnow({domains:domains.map(d=>d.id===entry.domainId?{...d,themes:d.themes.map(t=>String(t.id)===String(entry.themeId)?{...t,entries:[...(t.entries||[]),e],updatedAt:nowTs()}:t)}:d)}); setAddEntry(null);};
-  const saveEdit=()=>{const ed=editEntry; saveKnow({domains:domains.map(d=>d.id===ed.domainId?{...d,themes:d.themes.map(t=>String(t.id)===String(ed.themeId)?{...t,entries:t.entries.map(e=>String(e.id)===String(ed.id)?{...ed,updatedAt:nowTs()}:e),updatedAt:nowTs()}:t)}:d)}); setEditEntry(null);};
-  const removeEntry=(domainId,themeId,id)=>saveKnow({domains:domains.map(d=>d.id===domainId?{...d,themes:d.themes.map(t=>String(t.id)===String(themeId)?{...t,entries:softDelete(t.entries,id)}:t)}:d)});
-  const flat=[]; for(const d of domains){for(const t of d.themes||[]){for(const e of t.entries||[]){flat.push({...e,domainId:d.id,themeId:t.id,themeName:t.name,domainLabel:DOMAINS.find(x=>x.id===d.id)?.label||d.id})}}}
+  const ensureDefaultTheme=(currentDomains,domainId="d3")=>{
+    let dom=currentDomains.find(d=>d.id===domainId);
+    let theme=(dom?.themes||[]).find(t=>!t._deleted);
+    if(theme) return {domains:currentDomains,theme};
+    theme={id:uid(),name:"待分类",entries:[],updatedAt:nowTs(),_deleted:false};
+    const next=currentDomains.map(d=>d.id===domainId?{...d,themes:[...(d.themes||[]),theme]}:d);
+    return {domains:next,theme};
+  };
+  const addEntrySave=(entry)=>{
+    const sourceLog=entry.sourceLogForExtraction||null;
+    const clean={...entry}; delete clean.sourceLogForExtraction;
+    const e={...clean,id:uid(),createdAt:today(),updatedAt:nowTs(),_deleted:false};
+    const newKnowledge={domains:domains.map(d=>d.id===e.domainId?{...d,themes:(d.themes||[]).map(t=>String(t.id)===String(e.themeId)?{...t,entries:[...(t.entries||[]),e],updatedAt:nowTs()}:t)}:d)};
+    let newLogs=data.logs||{};
+    if(sourceLog){
+      const arr=(newLogs[sourceLog.date]||[]).map(l=>String(l.id)===String(sourceLog.id)?{...l,extractionStatus:"extracted",extractedEntryId:e.id,updatedAt:nowTs()}:l);
+      newLogs={...newLogs,[sourceLog.date]:arr};
+    }
+    save({...data,knowledge:newKnowledge,logs:newLogs});
+    setAddEntry(null);
+  };
+  const saveEdit=()=>{const ed=editEntry; saveKnow({domains:domains.map(d=>d.id===ed.domainId?{...d,themes:(d.themes||[]).map(t=>String(t.id)===String(ed.themeId)?{...t,entries:(t.entries||[]).map(e=>String(e.id)===String(ed.id)?{...ed,updatedAt:nowTs()}:e),updatedAt:nowTs()}:t)}:d)}); setEditEntry(null);};
+  const removeEntry=(domainId,themeId,id)=>saveKnow({domains:domains.map(d=>d.id===domainId?{...d,themes:(d.themes||[]).map(t=>String(t.id)===String(themeId)?{...t,entries:softDelete(t.entries,id)}:t)}:d)});
+  const flat=[]; for(const d of domains){for(const t of d.themes||[]){for(const e of t.entries||[]){if(!t._deleted&&!e._deleted) flat.push({...e,domainId:d.id,themeId:t.id,themeName:t.name,domainLabel:DOMAINS.find(x=>x.id===d.id)?.label||d.id})}}}
+  const pendingLogs=[];
+  for(const [date,arr] of Object.entries(data.logs||{})){
+    for(const l of arr||[]){
+      if(l&&!l._deleted&&l.extractable&&!l.extractionStatus){pendingLogs.push({...l,date});}
+    }
+  }
+  pendingLogs.sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b.updatedAt||0)-(a.updatedAt||0));
   const matchText=x=>!search||JSON.stringify(x).includes(search);
-  return <><div style={S.card}><div style={{display:"flex",gap:8,marginBottom:10}}><button style={S.btnSm(view==="topic"?"#2563eb":"#f3f4f6",view==="topic"?"#fff":"#374151")} onClick={()=>setView("topic")}>按主题</button><button style={S.btnSm(view==="project"?"#2563eb":"#f3f4f6",view==="project"?"#fff":"#374151")} onClick={()=>setView("project")}>按项目</button></div><input style={S.input} placeholder="搜索知识库…" value={search} onChange={e=>setSearch(e.target.value)}/></div>{view==="topic"&&domains.map(d=>{const domainDef=DOMAINS.find(x=>x.id===d.id); const themes=(d.themes||[]).filter(t=>!t._deleted&&matchText(t)); if(search&&!themes.length)return null; return <div key={d.id} style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><div style={{fontSize:14,fontWeight:900}}>{domainDef?.label}</div><button style={S.btnSm("#2563eb","#fff")} onClick={()=>setAddThemeDomain(d.id)}>+ 主题</button></div>{addThemeDomain===d.id&&<div style={{display:"flex",gap:8,marginBottom:10}}><input style={S.input} placeholder="新主题名称" value={themeName} onChange={e=>setThemeName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTheme()}/><button style={S.btn()} onClick={addTheme}>✓</button></div>}{themes.map(t=><details key={t.id} open style={{marginBottom:8,background:"#f9fafb",borderRadius:10,padding:"10px 12px"}}><summary style={{fontWeight:800,cursor:"pointer"}}>{t.name} <span style={{fontSize:11,color:"#9ca3af"}}>{(t.entries||[]).filter(e=>!e._deleted).length}条</span></summary><div style={{marginTop:8,display:"flex",gap:6}}><button style={S.btnSm("#2563eb","#fff")} onClick={()=>setAddEntry({domainId:d.id,themeId:t.id,title:"",content:"",projectId:null,tags:[],entryType:"判断框架",confidence:"可复用"})}>+ 条目</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>removeTheme(d.id,t.id)}>删主题</button></div>{(t.entries||[]).filter(e=>!e._deleted&&matchText(e)).map(e=><KnowledgeEntry key={e.id} e={{...e,domainId:d.id,themeId:t.id,themeName:t.name}} projects={activeProjects(data.projects)} onEdit={()=>setEditEntry({...e,domainId:d.id,themeId:t.id})} onDelete={()=>removeEntry(d.id,t.id,e.id)}/>)}</details>)}</div>})}{view==="project"&&<div style={S.card}>{[...activeProjects(data.projects),{id:null,name:"无归属项目"}].map(p=>{const arr=flat.filter(e=>p.id?String(e.projectId)===String(p.id):!e.projectId).filter(matchText); if(!arr.length)return null; return <div key={p.id||"none"} style={{marginBottom:14}}><div style={{fontSize:14,fontWeight:900,borderBottom:"2px solid #e5e7eb",paddingBottom:6,marginBottom:8}}>{p.name}</div>{arr.map(e=><KnowledgeEntry key={e.id} e={e} projects={activeProjects(data.projects)} onEdit={()=>setEditEntry(e)} onDelete={()=>removeEntry(e.domainId,e.themeId,e.id)}/>)}</div>})}</div>}{addEntry&&<KnowledgeEntryModal entry={addEntry} setEntry={setAddEntry} projects={activeProjects(data.projects)} domains={domains} onSave={()=>addEntrySave(addEntry)} onClose={()=>setAddEntry(null)}/>} {editEntry&&<KnowledgeEntryModal entry={editEntry} setEntry={setEditEntry} projects={activeProjects(data.projects)} domains={domains} onSave={saveEdit} onClose={()=>setEditEntry(null)}/>}</>;
+  const markLog=(date,id,status)=>{
+    const arr=(data.logs?.[date]||[]).map(l=>String(l.id)===String(id)?{...l,extractionStatus:status,updatedAt:nowTs()}:l);
+    save({...data,logs:{...(data.logs||{}),[date]:arr}});
+  };
+  const extractLog=(log)=>{
+    const {domains:newDomains,theme}=ensureDefaultTheme(domains,"d3");
+    if(newDomains!==domains){save({...data,knowledge:{domains:newDomains}});}
+    setAddEntry({
+      domainId:"d3",
+      themeId:theme.id,
+      title:log.name||"",
+      content:log.note||log.name||"",
+      projectId:log.projectId||null,
+      tags:[],
+      entryType:"判断框架",
+      confidence:"草稿",
+      logRef:{date:log.date,taskId:log.id},
+      sourceLogForExtraction:{date:log.date,id:log.id}
+    });
+  };
+  return <>
+    <div style={S.card}>
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <button style={S.btnSm(view==="topic"?"#2563eb":"#f3f4f6",view==="topic"?"#fff":"#374151")} onClick={()=>setView("topic")}>按主题</button>
+        <button style={S.btnSm(view==="project"?"#2563eb":"#f3f4f6",view==="project"?"#fff":"#374151")} onClick={()=>setView("project")}>按项目</button>
+        <button style={S.btnSm(view==="pending"?"#2563eb":"#f3f4f6",view==="pending"?"#fff":"#374151")} onClick={()=>setView("pending")}>待提炼 {pendingLogs.length}</button>
+      </div>
+      <input style={S.input} placeholder="搜索知识库…" value={search} onChange={e=>setSearch(e.target.value)}/>
+    </div>
+    {view==="topic"&&domains.map(d=>{const domainDef=DOMAINS.find(x=>x.id===d.id); const themes=(d.themes||[]).filter(t=>!t._deleted&&matchText(t)); if(search&&!themes.length)return null; return <div key={d.id} style={S.card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><div style={{fontSize:14,fontWeight:900}}>{domainDef?.label}</div><button style={S.btnSm("#2563eb","#fff")} onClick={()=>setAddThemeDomain(d.id)}>+ 主题</button></div>{addThemeDomain===d.id&&<div style={{display:"flex",gap:8,marginBottom:10}}><input style={S.input} placeholder="新主题名称" value={themeName} onChange={e=>setThemeName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTheme()}/><button style={S.btn()} onClick={addTheme}>✓</button></div>}{themes.map(t=><details key={t.id} open style={{marginBottom:8,background:"#f9fafb",borderRadius:10,padding:"10px 12px"}}><summary style={{fontWeight:800,cursor:"pointer"}}>{t.name} <span style={{fontSize:11,color:"#9ca3af"}}>{(t.entries||[]).filter(e=>!e._deleted).length}条</span></summary><div style={{marginTop:8,display:"flex",gap:6}}><button style={S.btnSm("#2563eb","#fff")} onClick={()=>setAddEntry({domainId:d.id,themeId:t.id,title:"",content:"",projectId:null,tags:[],entryType:"判断框架",confidence:"可复用"})}>+ 条目</button><button style={S.btnSm("#dc2626","#fff")} onClick={()=>removeTheme(d.id,t.id)}>删主题</button></div>{(t.entries||[]).filter(e=>!e._deleted&&matchText(e)).map(e=><KnowledgeEntry key={e.id} e={{...e,domainId:d.id,themeId:t.id,themeName:t.name}} projects={activeProjects(data.projects)} onEdit={()=>setEditEntry({...e,domainId:d.id,themeId:t.id})} onDelete={()=>removeEntry(d.id,t.id,e.id)}/>)}</details>)}</div>})}
+    {view==="project"&&<div style={S.card}>{[...activeProjects(data.projects),{id:null,name:"无归属项目"}].map(p=>{const arr=flat.filter(e=>p.id?String(e.projectId)===String(p.id):!e.projectId).filter(matchText); if(!arr.length)return null; return <div key={p.id||"none"} style={{marginBottom:14}}><div style={{fontSize:14,fontWeight:900,borderBottom:"2px solid #e5e7eb",paddingBottom:6,marginBottom:8}}>{p.name}</div>{arr.map(e=><KnowledgeEntry key={e.id} e={e} projects={activeProjects(data.projects)} onEdit={()=>setEditEntry(e)} onDelete={()=>removeEntry(e.domainId,e.themeId,e.id)}/>)}</div>})}</div>}
+    {view==="pending"&&<div style={S.card}>{pendingLogs.length?pendingLogs.filter(matchText).map(log=>{const p=activeProjects(data.projects).find(x=>String(x.id)===String(log.projectId)); return <div key={`${log.date}-${log.id}`} style={{padding:"10px 0",borderBottom:"1px solid #e5e7eb"}}><div style={{fontSize:13,fontWeight:850}}>{log.date} · {log.name}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>{fmtMins(log.mins)}{p?` · ${p.name}`:""}</div>{log.note&&<div style={{fontSize:12,color:"#4b5563",whiteSpace:"pre-wrap",marginTop:6,maxHeight:140,overflow:"auto",borderLeft:"2px solid #e5e7eb",paddingLeft:10}}>{log.note}</div>}<div style={{display:"flex",gap:6,marginTop:8}}><button style={S.btnSm("#2563eb","#fff")} onClick={()=>extractLog(log)}>提炼成知识</button><button style={S.btnSm("#f3f4f6","#374151")} onClick={()=>markLog(log.date,log.id,"ignored")}>标记已处理</button></div></div>}):<div style={{fontSize:12,color:"#9ca3af",padding:18,textAlign:"center"}}>暂无待提炼记录。每日记录里勾选“有可沉淀信息”后会出现在这里。</div>}</div>}
+    {addEntry&&<KnowledgeEntryModal entry={addEntry} setEntry={setAddEntry} projects={activeProjects(data.projects)} domains={domains} onSave={()=>addEntrySave(addEntry)} onClose={()=>setAddEntry(null)}/>} 
+    {editEntry&&<KnowledgeEntryModal entry={editEntry} setEntry={setEditEntry} projects={activeProjects(data.projects)} domains={domains} onSave={saveEdit} onClose={()=>setEditEntry(null)}/>} 
+  </>;
 }
 function KnowledgeEntry({e,projects,onEdit,onDelete}){const p=projects.find(x=>String(x.id)===String(e.projectId));return <div style={{padding:"10px 0",borderBottom:"1px solid #e5e7eb"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:850}}>{e.title||e.themeName}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>{e.entryType} · {e.confidence}{p?` · ${p.name}`:""}</div></div><div style={{display:"flex",gap:5}}><button style={S.btnSm("#f59e0b","#fff")} onClick={onEdit}>✎</button><button style={S.btnSm("#dc2626","#fff")} onClick={onDelete}>删</button></div></div><div style={{marginTop:6}}>{renderMd(e.content)}</div></div>}
 function KnowledgeEntryModal({entry,setEntry,projects,domains,onSave,onClose}){const themes=(domains.find(d=>d.id===entry.domainId)?.themes||[]).filter(t=>!t._deleted);return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>知识条目</CardTitle><label style={S.label}>标题</label><input style={{...S.input,marginBottom:8}} value={entry.title||""} onChange={e=>setEntry({...entry,title:e.target.value})}/><div style={{...S.row,marginBottom:8}}><select style={S.select} value={entry.domainId} onChange={e=>{const nd=e.target.value;const th=(domains.find(d=>d.id===nd)?.themes||[])[0];setEntry({...entry,domainId:nd,themeId:th?.id||null})}}>{DOMAINS.map(d=><option key={d.id} value={d.id}>{d.label}</option>)}</select><select style={S.select} value={entry.themeId||""} onChange={e=>setEntry({...entry,themeId:e.target.value})}>{themes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div><label style={S.label}>关联项目</label><div style={{marginBottom:8}}><ProjectSelect projects={projects} value={entry.projectId} onChange={v=>setEntry({...entry,projectId:v})}/></div><div style={{...S.row,marginBottom:8}}><select style={S.select} value={entry.entryType} onChange={e=>setEntry({...entry,entryType:e.target.value})}>{ENTRY_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select><select style={S.select} value={entry.confidence} onChange={e=>setEntry({...entry,confidence:e.target.value})}>{CONFIDENCE.map(x=><option key={x} value={x}>{x}</option>)}</select></div><label style={S.label}>内容</label><textarea style={{...S.textarea,minHeight:180,marginBottom:12}} value={entry.content||""} onChange={e=>setEntry({...entry,content:e.target.value})} placeholder="支持简单 Markdown"/><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={onSave}>保存</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
