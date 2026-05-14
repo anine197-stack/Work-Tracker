@@ -321,15 +321,30 @@ async function deriveKey(pwd,salt="wt-salt-v1"){
   const km=await crypto.subtle.importKey("raw",enc.encode(pwd),"PBKDF2",false,["deriveKey"]);
   return crypto.subtle.deriveKey({name:"PBKDF2",salt:enc.encode(salt),iterations:100000,hash:"SHA-256"},km,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
 }
+function bytesToBase64(bytes){
+  // 不能用 String.fromCharCode(...bytes)。数据稍大时会触发 Maximum call stack size exceeded。
+  let binary="";
+  const chunkSize=0x8000;
+  for(let i=0;i<bytes.length;i+=chunkSize){
+    binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunkSize));
+  }
+  return btoa(binary);
+}
+function base64ToBytes(b64){
+  const binary=atob(b64);
+  const bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+  return bytes;
+}
 async function encryptStr(text,pwd){
   const key=await deriveKey(pwd,"wt-salt-v1");
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const buf=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(text));
   const out=new Uint8Array(12+buf.byteLength);out.set(iv);out.set(new Uint8Array(buf),12);
-  return btoa(String.fromCharCode(...out));
+  return bytesToBase64(out);
 }
 async function decryptStr(b64,pwd){
-  const buf=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+  const buf=base64ToBytes(b64);
   let lastErr=null;
   for(const salt of ["wt-salt-v1","wt-salt-v3"]){
     try{
@@ -829,7 +844,7 @@ function ProjectsTab({data,save}){
         const r=relatedFor(proj);
         const isDeleted=!!proj._deleted;
         const open=String(editing)===String(proj.id);
-        return <div key={proj.id} style={{padding:"10px 12px",background:isDeleted?"#fafafa":"#f9fafb",border:"1px solid #e5e7eb",borderRadius:10,marginBottom:8,opacity:isDeleted?.55:1}}>
+        return <div key={proj.id} style={{padding:"10px 12px",background:isDeleted?"#fafafa":"#f9fafb",border:"1px solid #e5e7eb",borderRadius:10,marginBottom:8,opacity:isDeleted?0.55:1}}>
           <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:14,fontWeight:850,wordBreak:"break-word"}}>{proj.name}</div>
