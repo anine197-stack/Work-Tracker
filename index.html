@@ -151,6 +151,47 @@ function mergeLogs(local={}, remote={}){
   }
   return out;
 }
+function normalizeDailyNotes(notes={}){
+  const out={};
+  for(const [date,val] of Object.entries(notes||{})){
+    if(val&&typeof val==="object"&&!Array.isArray(val)){
+      out[date]={
+        text:String(val.text ?? val.note ?? ""),
+        updatedAt:Number(val.updatedAt||0)
+      };
+    }else{
+      // 兼容旧版：旧 dailyNotes 只是字符串，没有更新时间。
+      // 这里给 0，避免旧电脑端空字符串在同步时覆盖手机端新内容。
+      out[date]={text:String(val||""),updatedAt:0};
+    }
+  }
+  return out;
+}
+function dailyNoteText(notes,date){
+  const v=(notes||{})[date];
+  if(!v)return "";
+  if(typeof v==="object"&&!Array.isArray(v)) return String(v.text ?? v.note ?? "");
+  return String(v||"");
+}
+function mergeDailyNotes(local={},remote={}){
+  const l=normalizeDailyNotes(local), r=normalizeDailyNotes(remote);
+  const dates=new Set([...Object.keys(l),...Object.keys(r)]);
+  const out={};
+  for(const d of dates){
+    const lv=l[d], rv=r[d];
+    if(!lv){out[d]=rv; continue;}
+    if(!rv){out[d]=lv; continue;}
+    const lt=Number(lv.updatedAt||0), rt=Number(rv.updatedAt||0);
+    if(lt>rt) out[d]=lv;
+    else if(rt>lt) out[d]=rv;
+    else {
+      const lText=String(lv.text||""), rText=String(rv.text||"");
+      // 同为旧版无时间戳时，优先保留非空内容；两边都有内容则保留本地侧。
+      out[d]=(!lText.trim()&&rText.trim())?rv:lv;
+    }
+  }
+  return out;
+}
 function softDelete(arr,id){return (arr||[]).map(i=>String(i.id)===String(id)?{...i,_deleted:true,updatedAt:nowTs()}:i)}
 function reassignProjectRefs(data,fromId,toId){
   // 合并项目时，把所有引用 fromId 的待办/日志/知识改到 toId。
@@ -271,7 +312,7 @@ function normalizeData(input){
   let normalized={
     version:3,
     logs,
-    dailyNotes:d.dailyNotes||{},
+    dailyNotes:normalizeDailyNotes(d.dailyNotes||{}),
     projects,
     tasks,
     knowledge:normalizeKnowledge(d.knowledge||{}),
@@ -305,7 +346,7 @@ function mergeData(local,remote){
   return normalizeData({
     version:3,
     logs:mergeLogs(l.logs,r.logs),
-    dailyNotes:{...(r.dailyNotes||{}),...(l.dailyNotes||{})},
+    dailyNotes:mergeDailyNotes(l.dailyNotes,r.dailyNotes),
     projects:mergeById(l.projects,r.projects),
     tasks:mergeById(l.tasks,r.tasks),
     knowledge:mergeKnowledge(l.knowledge,r.knowledge),
@@ -525,8 +566,8 @@ function App(){
 function LogTab({data,save}){
   const [selDate,setSelDate]=useState(today());
   const [name,setName]=useState(""); const [cat,setCat]=useState("core"); const [mins,setMins]=useState(30); const [note,setNote]=useState(""); const [projectId,setProjectId]=useState(""); const [linkedTaskId,setLinkedTaskId]=useState(""); const [extractable,setExtractable]=useState(false);
-  const [edit,setEdit]=useState(null); const [dailyNote,setDailyNote]=useState(data.dailyNotes?.[selDate]||""); const [exportOpen,setExportOpen]=useState(false);
-  useEffect(()=>{setDailyNote(data.dailyNotes?.[selDate]||"")},[selDate,data.dailyNotes]);
+  const [edit,setEdit]=useState(null); const [dailyNote,setDailyNote]=useState(dailyNoteText(data.dailyNotes,selDate)); const [exportOpen,setExportOpen]=useState(false);
+  useEffect(()=>{setDailyNote(dailyNoteText(data.dailyNotes,selDate))},[selDate,data.dailyNotes]);
   const rawEntries=data.logs[selDate]||[];
   const entries=rawEntries.filter(e=>!e._deleted);
   const activeTasks=(data.tasks||[]).filter(t=>!t._deleted && !["done","dropped"].includes(t.status));
@@ -580,7 +621,7 @@ function LogTab({data,save}){
     save({...data,logs:newLogs,tasks:newTasks});
   };
   const saveEdit=()=>{if(!edit)return; save({...data,logs:{...data.logs,[selDate]:rawEntries.map(e=>String(e.id)===String(edit.id)?{...edit,updatedAt:nowTs()}:e)}});setEdit(null)};
-  const saveDaily=()=>save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:dailyNote}});
+  const saveDaily=()=>save({...data,dailyNotes:{...(data.dailyNotes||{}),[selDate]:{text:dailyNote,updatedAt:nowTs()}}});
   const selectedLinkedTask=activeTasks.find(t=>String(t.id)===String(linkedTaskId));
   const chooseLinkedTask=(id)=>{
     setLinkedTaskId(id);
@@ -985,7 +1026,7 @@ function KnowledgeTab({data,save}){
 function KnowledgeEntry({e,projects,onEdit,onDelete}){const p=projects.find(x=>String(x.id)===String(e.projectId));return <div style={{padding:"10px 0",borderBottom:"1px solid #e5e7eb"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div style={{minWidth:0}}><div style={{fontSize:13,fontWeight:850}}>{e.title||e.themeName}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>{e.entryType} · {e.confidence}{p?` · ${p.name}`:""}</div></div><div style={{display:"flex",gap:5}}><button style={S.btnSm("#f59e0b","#fff")} onClick={onEdit}>✎</button><button style={S.btnSm("#dc2626","#fff")} onClick={onDelete}>删</button></div></div><div style={{marginTop:6}}>{renderMd(e.content)}</div></div>}
 function KnowledgeEntryModal({entry,setEntry,projects,domains,onSave,onClose}){const themes=(domains.find(d=>d.id===entry.domainId)?.themes||[]).filter(t=>!t._deleted);return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>知识条目</CardTitle><label style={S.label}>标题</label><input style={{...S.input,marginBottom:8}} value={entry.title||""} onChange={e=>setEntry({...entry,title:e.target.value})}/><div style={{...S.row,marginBottom:8}}><select style={S.select} value={entry.domainId} onChange={e=>{const nd=e.target.value;const th=(domains.find(d=>d.id===nd)?.themes||[])[0];setEntry({...entry,domainId:nd,themeId:th?.id||null})}}>{DOMAINS.map(d=><option key={d.id} value={d.id}>{d.label}</option>)}</select><select style={S.select} value={entry.themeId||""} onChange={e=>setEntry({...entry,themeId:e.target.value})}>{themes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div><label style={S.label}>关联项目</label><div style={{marginBottom:8}}><ProjectSelect projects={projects} value={entry.projectId} onChange={v=>setEntry({...entry,projectId:v})}/></div><div style={{...S.row,marginBottom:8}}><select style={S.select} value={entry.entryType} onChange={e=>setEntry({...entry,entryType:e.target.value})}>{ENTRY_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select><select style={S.select} value={entry.confidence} onChange={e=>setEntry({...entry,confidence:e.target.value})}>{CONFIDENCE.map(x=><option key={x} value={x}>{x}</option>)}</select></div><label style={S.label}>内容</label><textarea style={{...S.textarea,minHeight:180,marginBottom:12}} value={entry.content||""} onChange={e=>setEntry({...entry,content:e.target.value})} placeholder="支持简单 Markdown"/><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={onSave}>保存</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
 
-function ExportModal({data,defaultDate,onClose}){const [mode,setMode]=useState("all");const [from,setFrom]=useState(defaultDate);const [to,setTo]=useState(today());const [msg,setMsg]=useState("");const doExport=()=>{let payload=data; if(mode==="range"){payload={...data,logs:Object.fromEntries(Object.entries(data.logs||{}).filter(([d])=>d>=from&&d<=to)),dailyNotes:Object.fromEntries(Object.entries(data.dailyNotes||{}).filter(([d])=>d>=from&&d<=to))}}; if(mode==="today"){payload={...data,logs:{[defaultDate]:data.logs[defaultDate]||[]},dailyNotes:{[defaultDate]:data.dailyNotes?.[defaultDate]||""}}}; const blob=new Blob([JSON.stringify({...payload,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`work-tracker-v3-${mode==="all"?"all":mode==="today"?defaultDate:`${from}_${to}`}.json`; a.click(); onClose();}; return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>导出数据</CardTitle><div style={{display:"flex",gap:8,marginBottom:10}}>{[["all","全部"],["today","当天"],["range","范围"]].map(([k,l])=><button key={k} style={{...S.btn(mode===k?"#2563eb":"#f3f4f6",mode===k?"#fff":"#374151"),flex:1}} onClick={()=>setMode(k)}>{l}</button>)}</div>{mode==="range"&&<div style={{...S.row,marginBottom:10}}><input type="date" style={S.input} value={from} onChange={e=>setFrom(e.target.value)}/><input type="date" style={S.input} value={to} onChange={e=>setTo(e.target.value)}/></div>}{msg&&<div style={{fontSize:12,color:"#dc2626"}}>{msg}</div>}<div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={doExport}>导出明文</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
+function ExportModal({data,defaultDate,onClose}){const [mode,setMode]=useState("all");const [from,setFrom]=useState(defaultDate);const [to,setTo]=useState(today());const [msg,setMsg]=useState("");const doExport=()=>{let payload=data; if(mode==="range"){payload={...data,logs:Object.fromEntries(Object.entries(data.logs||{}).filter(([d])=>d>=from&&d<=to)),dailyNotes:Object.fromEntries(Object.entries(data.dailyNotes||{}).filter(([d])=>d>=from&&d<=to))}}; if(mode==="today"){payload={...data,logs:{[defaultDate]:data.logs[defaultDate]||[]},dailyNotes:{[defaultDate]:data.dailyNotes?.[defaultDate]||{text:"",updatedAt:0}}}}; const blob=new Blob([JSON.stringify({...payload,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`work-tracker-v3-${mode==="all"?"all":mode==="today"?defaultDate:`${from}_${to}`}.json`; a.click(); onClose();}; return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>导出数据</CardTitle><div style={{display:"flex",gap:8,marginBottom:10}}>{[["all","全部"],["today","当天"],["range","范围"]].map(([k,l])=><button key={k} style={{...S.btn(mode===k?"#2563eb":"#f3f4f6",mode===k?"#fff":"#374151"),flex:1}} onClick={()=>setMode(k)}>{l}</button>)}</div>{mode==="range"&&<div style={{...S.row,marginBottom:10}}><input type="date" style={S.input} value={from} onChange={e=>setFrom(e.target.value)}/><input type="date" style={S.input} value={to} onChange={e=>setTo(e.target.value)}/></div>}{msg&&<div style={{fontSize:12,color:"#dc2626"}}>{msg}</div>}<div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={doExport}>导出明文</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
 
 function SettingsTab({data,save,ghToken,setGhToken,ghGistId,encPwd,setEncPwd,syncStatus,syncMsg,isConfigured,manualSync,connectGist,disconnect}){
   const [mode,setMode]=useState("new"); const [existing,setExisting]=useState(""); const [show,setShow]=useState(false);
