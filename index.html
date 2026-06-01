@@ -777,11 +777,34 @@ function LogTab({data,save}){
 }
 
 function TasksTab({data,save}){
-  const [quick,setQuick]=useState(""); const [mode,setMode]=useState("daily"); const [edit,setEdit]=useState(null); const [organize,setOrganize]=useState(null); const [projectOrganize,setProjectOrganize]=useState(false);
+  const [quick,setQuick]=useState(""); const [mode,setMode]=useState("daily"); const [edit,setEdit]=useState(null); const [organize,setOrganize]=useState(null); const [projectOrganize,setProjectOrganize]=useState(false); const [doneProjectOrganize,setDoneProjectOrganize]=useState(false);
   const tasks=(data.tasks||[]).filter(t=>!t._deleted);
   const projects=activeProjects(data.projects);
   const active=tasks.filter(t=>t.status!=="done"&&t.status!=="dropped");
   const unassignedActive=active.filter(t=>!t.projectId);
+  const doneTasks=tasks.filter(t=>t.status==="done");
+  const assignTasksProject=(ids,projectId,opts={})=>{
+    const idSet=new Set((ids||[]).map(String));
+    if(!idSet.size)return;
+    const normalizedProjectId=projectId||null;
+    const allTasks=data.tasks||[];
+    const taskMap=new Map(allTasks.filter(t=>idSet.has(String(t.id))).map(t=>[String(t.id),t]));
+    const newTasks=allTasks.map(t=>idSet.has(String(t.id))?{...t,projectId:normalizedProjectId,updatedAt:nowTs()}:t);
+    let newLogs=data.logs||{};
+    if(opts.syncLogs){
+      newLogs=Object.fromEntries(Object.entries(data.logs||{}).map(([d,arr])=>[d,(arr||[]).map(e=>{
+        let matched=e.sourceTaskId&&idSet.has(String(e.sourceTaskId));
+        if(!matched){
+          for(const t of taskMap.values()){
+            const ref=t.loggedLogRef;
+            if(ref&&String(ref.date)===String(d)&&String(ref.entryId)===String(e.id)){matched=true;break;}
+          }
+        }
+        return matched?{...e,projectId:normalizedProjectId,updatedAt:nowTs()}:e;
+      })]));
+    }
+    save({...data,tasks:newTasks,logs:newLogs});
+  };
   const addQuick=()=>{if(!quick.trim())return; const t={id:uid(),title:quick.trim(),status:"inbox",projectId:null,nextAction:"",waitingFor:"",note:"",due:null,pinned:false,source:"manual",createdAt:today(),updatedAt:nowTs()}; save({...data,tasks:[t,...tasks]}); setQuick("");};
   const updateTask=(id,patch)=>save({...data,tasks:tasks.map(t=>String(t.id)===String(id)?{...t,...patch,updatedAt:nowTs()}:t)});
   const removeTask=id=>save({...data,tasks:softDelete(tasks,id)});
@@ -819,13 +842,14 @@ function TasksTab({data,save}){
   const Section=({status})=>{const s=statusDef(status); const arr=sorted(tasks.filter(t=>t.status===status)); if(!arr.length&&status!=="inbox")return null; return <div style={{marginBottom:16}}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}><div style={{fontSize:14,fontWeight:850,color:"#111827"}}>{s.label} <span style={{color:"#9ca3af",fontSize:12}}>{arr.length}</span></div>{status==="inbox"&&arr.length>0&&<button style={S.btnSm("#2563eb","#fff")} onClick={openOrganize}>整理收件箱</button>}</div>{arr.length?arr.map(t=><TaskCard key={t.id} task={t}/>):<div style={{textAlign:"center",fontSize:12,color:"#9ca3af",padding:18,background:"#f9fafb",borderRadius:9}}>收件箱为空</div>}</div>};
   return <>
     <div style={S.card}><CardTitle sub="想到什么先扔进来，不用选项目、不用判断急不急。">快速扔待办</CardTitle><div style={{display:"flex",gap:8}}><input style={S.input} placeholder="快速扔一个待办……" value={quick} onChange={e=>setQuick(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addQuick()}/><button style={S.btn()} onClick={addQuick}>+</button></div></div>
-    <div style={S.card}><div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>{TASK_STATUS.filter(s=>s.key!=="dropped"&&s.key!=="done").map(s=><button key={s.key} style={S.btnSm(mode===s.key?s.color:"#f3f4f6",mode===s.key?"#fff":"#374151")} onClick={()=>setMode(s.key)}>{s.label} {counts[s.key]||0}</button>)}<button style={S.btnSm(mode==="daily"?"#111827":"#f3f4f6",mode==="daily"?"#fff":"#374151")} onClick={()=>setMode("daily")}>日常查看</button><button style={S.btnSm(mode==="project"?"#111827":"#f3f4f6",mode==="project"?"#fff":"#374151")} onClick={()=>setMode("project")}>按项目查看</button><button style={S.btnSm(unassignedActive.length?"#2563eb":"#f3f4f6",unassignedActive.length?"#fff":"#9ca3af")} onClick={()=>setProjectOrganize(true)}>整理项目归属 {unassignedActive.length}</button></div>
+    <div style={S.card}><div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>{TASK_STATUS.filter(s=>s.key!=="dropped"&&s.key!=="done").map(s=><button key={s.key} style={S.btnSm(mode===s.key?s.color:"#f3f4f6",mode===s.key?"#fff":"#374151")} onClick={()=>setMode(s.key)}>{s.label} {counts[s.key]||0}</button>)}<button style={S.btnSm(mode==="daily"?"#111827":"#f3f4f6",mode==="daily"?"#fff":"#374151")} onClick={()=>setMode("daily")}>日常查看</button><button style={S.btnSm(mode==="project"?"#111827":"#f3f4f6",mode==="project"?"#fff":"#374151")} onClick={()=>setMode("project")}>按项目查看</button><button style={S.btnSm(unassignedActive.length?"#2563eb":"#f3f4f6",unassignedActive.length?"#fff":"#9ca3af")} onClick={()=>setProjectOrganize(true)}>整理项目归属 {unassignedActive.length}</button><button style={S.btnSm(doneTasks.length?"#7c3aed":"#f3f4f6",doneTasks.length?"#fff":"#9ca3af")} onClick={()=>setDoneProjectOrganize(true)}>整理已完成归属 {doneTasks.length}</button></div>
       {mode==="daily"&&<><Section status="today"/><Section status="next"/><Section status="waiting"/><Section status="inbox"/><Section status="someday"/><details><summary style={{fontSize:13,fontWeight:750,color:"#6b7280",cursor:"pointer"}}>已完成 {counts.done||0}</summary><div style={{marginTop:8}}>{sorted(tasks.filter(t=>t.status==="done")).map(t=><TaskCard key={t.id} task={t}/>)}</div></details></>}
       {TASK_STATUS.some(s=>s.key===mode)&&mode!=="daily"&&mode!=="project"&&<Section status={mode}/>} 
       {mode==="project"&&<div>{[...projects,{id:null,name:"无归属项目"}].map(p=>{const arr=sorted(active.filter(t=>p.id?String(t.projectId)===String(p.id):!t.projectId)); if(!arr.length)return null; return <div key={p.id||"none"} style={{marginBottom:14}}><div style={{fontSize:14,fontWeight:850,borderBottom:"2px solid #e5e7eb",paddingBottom:6,marginBottom:8}}>{p.name}</div>{arr.map(t=><TaskCard key={t.id} task={t}/>)}</div>})}</div>}
     </div>
     {organize&&<OrganizeModal task={organize} setTask={setOrganize} projects={projects} onSave={saveOrganize} onClose={()=>setOrganize(null)} remaining={inbox.length}/>} 
-    {projectOrganize&&<TaskProjectOrganizeModal tasks={unassignedActive} projects={projects} onAssign={(ids,projectId)=>{save({...data,tasks:tasks.map(t=>ids.includes(String(t.id))?{...t,projectId,updatedAt:nowTs()}:t)});}} onClose={()=>setProjectOrganize(false)}/>}
+    {projectOrganize&&<TaskProjectOrganizeModal tasks={unassignedActive} projects={projects} title="整理未完成待办归属" sub="把已经进入今天/近期/等待等状态、但还没有归属项目的待办集中整理。" emptyText="当前没有无项目归属的未完成待办。" initialSelectAll={true} onAssign={(ids,projectId)=>assignTasksProject(ids,projectId,{syncLogs:false})} onClose={()=>setProjectOrganize(false)}/>}
+    {doneProjectOrganize&&<TaskProjectOrganizeModal tasks={sorted(doneTasks)} projects={projects} title="整理已完成事项归属" sub="用于修复已完成待办的项目归属。批量修改会同步更新由该待办生成的每日记录项目归属。" emptyText="当前没有已完成事项。" initialSelectAll={false} onAssign={(ids,projectId)=>assignTasksProject(ids,projectId,{syncLogs:true})} onClose={()=>setDoneProjectOrganize(false)}/>}
     {edit&&<TaskEditModal task={edit} setTask={setEdit} projects={projects} onSave={()=>{updateTask(edit.id,edit);setEdit(null)}} onDelete={()=>{removeTask(edit.id);setEdit(null)}} onClose={()=>setEdit(null)}/>} 
   </>
 }
@@ -853,25 +877,35 @@ function TaskToLogModal({task,projects,onSave,onClose}){
   </div></div>
 }
 
-function TaskProjectOrganizeModal({tasks,projects,onAssign,onClose}){
-  const [selected,setSelected]=useState(()=>Object.fromEntries((tasks||[]).map(t=>[String(t.id),true])));
+function TaskProjectOrganizeModal({tasks,projects,onAssign,onClose,title="整理待办项目归属",sub="把已经进入今天/近期/等待等状态、但还没有归属项目的待办集中整理。",emptyText="当前没有无项目归属的未完成待办。",initialSelectAll=true}){
+  const [selected,setSelected]=useState(()=>Object.fromEntries((tasks||[]).map(t=>[String(t.id),!!initialSelectAll])));
   const [target,setTarget]=useState(projects[0]?.id||"");
+  const [query,setQuery]=useState("");
+  const projectName=id=>(projects.find(p=>String(p.id)===String(id))?.name||"");
+  const visibleTasks=(tasks||[]).filter(t=>{
+    const q=query.trim();
+    if(!q)return true;
+    return [t.title,t.note,t.nextAction,t.waitingFor,projectName(t.projectId),statusDef(t.status).label].some(x=>String(x||"").includes(q));
+  });
   const selectedIds=Object.entries(selected).filter(([_,v])=>v).map(([id])=>id);
+  const visibleSelectedIds=visibleTasks.filter(t=>selected[String(t.id)]).map(t=>String(t.id));
   const toggle=id=>setSelected(v=>({...v,[String(id)]:!v[String(id)]}));
-  const selectAll=()=>setSelected(Object.fromEntries((tasks||[]).map(t=>[String(t.id),true])));
-  const selectNone=()=>setSelected({});
+  const selectAll=()=>setSelected(v=>({...v,...Object.fromEntries(visibleTasks.map(t=>[String(t.id),true]))}));
+  const selectNone=()=>setSelected(v=>({...v,...Object.fromEntries(visibleTasks.map(t=>[String(t.id),false]))}));
   const assignOne=(taskId,projectId)=>onAssign([String(taskId)],projectId||null);
   const batchAssign=()=>{if(!target||!selectedIds.length)return; onAssign(selectedIds,target); setSelected({});};
   return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}>
-    <CardTitle sub="把已经进入今天/近期/等待等状态、但还没有归属项目的待办集中整理。">整理待办项目归属</CardTitle>
-    {tasks.length===0?<div style={{fontSize:13,color:"#9ca3af",padding:24,textAlign:"center",background:"#f9fafb",borderRadius:10}}>当前没有无项目归属的未完成待办。</div>:<>
+    <CardTitle sub={sub}>{title}</CardTitle>
+    {tasks.length===0?<div style={{fontSize:13,color:"#9ca3af",padding:24,textAlign:"center",background:"#f9fafb",borderRadius:10}}>{emptyText}</div>:<>
+      <input style={{...S.input,marginBottom:10}} placeholder="搜索标题、备注、项目、状态…" value={query} onChange={e=>setQuery(e.target.value)}/>
       <label style={S.label}>批量归属到</label>
       <div style={{display:"flex",gap:8,marginBottom:10}}><div style={{flex:1}}><ProjectSelect projects={projects} value={target} onChange={setTarget}/></div><button style={S.btn("#2563eb")} onClick={batchAssign} disabled={!target||!selectedIds.length}>批量归属</button></div>
-      <div style={{display:"flex",gap:6,marginBottom:10}}><button style={S.btnSm()} onClick={selectAll}>全选</button><button style={S.btnSm()} onClick={selectNone}>全不选</button><span style={{fontSize:12,color:"#9ca3af",alignSelf:"center"}}>已选 {selectedIds.length} / {tasks.length}</span></div>
-      <div style={{maxHeight:"48vh",overflowY:"auto",paddingRight:2}}>{tasks.map(t=><div key={t.id} style={{padding:10,background:"#f9fafb",borderRadius:9,marginBottom:8,border:"1px solid #e5e7eb"}}>
-        <div style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:8}}><input type="checkbox" checked={!!selected[String(t.id)]} onChange={()=>toggle(t.id)} style={{marginTop:2}}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:750}}>{t.title}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:4}}><StatusPill status={t.status}/>{t.due&&<span style={{marginLeft:6}}>截止：{t.due}</span>}{t.nextAction&&<span style={{marginLeft:6}}>下一步：{t.nextAction}</span>}</div></div></div>
+      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}><button style={S.btnSm()} onClick={selectAll}>全选当前</button><button style={S.btnSm()} onClick={selectNone}>取消当前</button><span style={{fontSize:12,color:"#9ca3af",alignSelf:"center"}}>已选 {selectedIds.length} / 当前显示 {visibleTasks.length} / 全部 {tasks.length}</span></div>
+      <div style={{maxHeight:"48vh",overflowY:"auto",paddingRight:2}}>{visibleTasks.map(t=><div key={t.id} style={{padding:10,background:"#f9fafb",borderRadius:9,marginBottom:8,border:"1px solid #e5e7eb"}}>
+        <div style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:8}}><input type="checkbox" checked={!!selected[String(t.id)]} onChange={()=>toggle(t.id)} style={{marginTop:2}}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:750}}>{t.title}</div><div style={{fontSize:11,color:"#9ca3af",marginTop:4}}><StatusPill status={t.status}/>{t.due&&<span style={{marginLeft:6}}>截止：{t.due}</span>}{t.nextAction&&<span style={{marginLeft:6}}>下一步：{t.nextAction}</span>}{t.doneAt&&<span style={{marginLeft:6}}>完成：{t.doneAt}</span>}</div>{t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:5,whiteSpace:"pre-wrap",maxHeight:54,overflow:"hidden"}}>{t.note}</div>}</div></div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}><div style={{flex:1}}><ProjectSelect projects={projects} value={t.projectId} onChange={v=>assignOne(t.id,v)}/></div><button style={S.btnSm("#f3f4f6","#374151")} onClick={()=>assignOne(t.id,null)}>无项目</button></div>
       </div>)}</div>
+      {visibleTasks.length===0&&<div style={{fontSize:12,color:"#9ca3af",padding:16,textAlign:"center",background:"#f9fafb",borderRadius:9}}>没有匹配项</div>}
     </>}
     <button style={{...S.btnFull("#f3f4f6","#374151"),marginTop:10}} onClick={onClose}>关闭</button>
   </div></div>
