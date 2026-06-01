@@ -115,6 +115,93 @@ function autoMergeProjects(data){
   return out;
 }
 
+function projectRefCount(data,projectId){
+  let count=0;
+  for(const t of data.tasks||[]){
+    if(String(t.projectId)===String(projectId) && !t._deleted) count++;
+  }
+  for(const arr of Object.values(data.logs||{})){
+    for(const e of arr||[]){
+      if(String(e.projectId)===String(projectId) && !e._deleted) count++;
+    }
+  }
+  for(const dom of data.knowledge?.domains||[]){
+    for(const th of dom.themes||[]){
+      if(th._deleted) continue;
+      for(const e of th.entries||[]){
+        if(String(e.projectId)===String(projectId) && !e._deleted) count++;
+      }
+    }
+  }
+  return count;
+}
+function projectContentScore(data,p){
+  let score=projectRefCount(data,p.id)*100000;
+  if((p.goal||"").trim()) score+=1000;
+  if((p.currentState||"").trim()) score+=800;
+  if((p.nextAction||"").trim()) score+=600;
+  if((p.stakeholders||[]).length) score+=200;
+  if((p.tags||[]).length) score+=100;
+  return score;
+}
+function pickProjectKeeper(data,items){
+  return [...items].sort((a,b)=>{
+    const scoreDiff=projectContentScore(data,b)-projectContentScore(data,a);
+    if(scoreDiff) return scoreDiff;
+    const ca=String(a.createdAt||""), cb=String(b.createdAt||"");
+    const createdDiff=ca.localeCompare(cb);
+    if(createdDiff) return createdDiff;
+    return String(a.id).localeCompare(String(b.id));
+  })[0];
+}
+function dedupeProjectsByExactName(data){
+  // 只处理“标准化后名称完全相同”的重复项目。
+  // 这不是旧版 alias 自动清理，所以不会把用户后来新增的相似项目强行合并；
+  // 主要用于修复多端同步时本地默认项目与云端项目 ID 不同、但名称相同导致的重复。
+  let out={...data,projects:[...(data.projects||[])]};
+  const groups=new Map();
+  for(const p of out.projects||[]){
+    if(!p || p._deleted) continue;
+    const key=cleanProjectName(p.name);
+    if(!key) continue;
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(p);
+  }
+  for(const items of groups.values()){
+    if(items.length<=1) continue;
+    const target=pickProjectKeeper(out,items);
+    for(const p of items){
+      if(String(p.id)===String(target.id)) continue;
+      out=reassignProjectRefs(out,p.id,target.id);
+      out.projects=softDelete(out.projects,p.id);
+    }
+  }
+  return out;
+}
+function isPristineDefaultData(d){
+  const n=normalizeData(d,{seedDefaultProjects:true});
+  const hasLogs=Object.values(n.logs||{}).some(arr=>(arr||[]).some(e=>!e._deleted));
+  const hasTasks=(n.tasks||[]).some(t=>!t._deleted);
+  const hasNotes=Object.entries(n.dailyNotes||{}).some(([d])=>dailyNoteText(n.dailyNotes,d).trim());
+  let hasKnowledge=false;
+  for(const dom of n.knowledge?.domains||[]){
+    for(const th of dom.themes||[]){
+      if(th._deleted) continue;
+      if((th.entries||[]).some(e=>!e._deleted)) hasKnowledge=true;
+    }
+  }
+  const visibleProjects=(n.projects||[]).filter(p=>!p._deleted);
+  const defaultNames=new Set(DEFAULT_PROJECTS.map(p=>cleanProjectName(p.name)));
+  const projectsOnlyDefault=visibleProjects.length===DEFAULT_PROJECTS.length && visibleProjects.every(p=>
+    defaultNames.has(cleanProjectName(p.name)) &&
+    !(p.currentState||"").trim() &&
+    !(p.nextAction||"").trim() &&
+    !(p.stakeholders||[]).length &&
+    !(p.tags||[]).length
+  );
+  return !hasLogs && !hasTasks && !hasNotes && !hasKnowledge && projectsOnlyDefault;
+}
+
 const today=()=>new Date().toISOString().slice(0,10);
 const nowTs=()=>Date.now();
 const uid=()=>Date.now()+Math.floor(Math.random()*1000);
@@ -202,11 +289,12 @@ function reassignProjectRefs(data,fromId,toId){
     knowledge:{domains:(data.knowledge?.domains||[]).map(dom=>({...dom,themes:(dom.themes||[]).map(th=>({...th,entries:(th.entries||[]).map(e=>String(e.projectId)===String(fromId)?{...e,projectId:toId,updatedAt:nowTs()}:e)}))}))}
   };
 }
-function ensureDefaultProjects(projects){
+function ensureDefaultProjects(projects,seedDefaults=true){
   // 只在完全没有项目时提供一组初始项目。
   // 已有旧数据时不再强行塞入默认项目，避免「年度预算更新」和
   // 「年度预算与经营分析体系」这类语义重复项目堆在一起。
   const arr=[...(projects||[])];
+  if(!seedDefaults) return arr;
   if(arr.filter(x=>!x._deleted).length>0) return arr;
   for(const p of DEFAULT_PROJECTS){
     arr.push({id:uid(),name:p.name,type:p.type,status:"active",goal:p.goal,currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()});
@@ -283,10 +371,11 @@ function normalizeKnowledge(k){
     }))};
   })};
 }
-function normalizeData(input){
+function normalizeData(input,options={}){
   const d=input||{};
+  const seedDefaultProjects=options.seedDefaultProjects!==false;
   let projects=(d.projects||d.pool?.projects||[]).map(normalizeProject);
-  projects=ensureDefaultProjects(projects);
+  projects=ensureDefaultProjects(projects,seedDefaultProjects);
   const tasks=(d.tasks||d.pool?.items||[]).map(normalizeTask);
   const logs={};
   for(const [date,arr] of Object.entries(d.logs||{})){
@@ -326,6 +415,8 @@ function normalizeData(input){
     normalized=autoMergeProjects(normalized);
     normalized.meta={...normalized.meta,projectAutoMergeDone:true,projectAutoMergeAt:new Date().toISOString()};
   }
+  // 每次规范化都做“完全同名项目”修复，专门防止多端同步产生同名不同 ID 项目。
+  normalized=dedupeProjectsByExactName(normalized);
   return normalized;
 }
 function mergeKnowledge(local,remote){
@@ -342,7 +433,7 @@ function mergeKnowledge(local,remote){
   })};
 }
 function mergeData(local,remote){
-  const l=normalizeData(local), r=normalizeData(remote);
+  const l=normalizeData(local,{seedDefaultProjects:false}), r=normalizeData(remote,{seedDefaultProjects:false});
   return normalizeData({
     version:3,
     logs:mergeLogs(l.logs,r.logs),
@@ -466,6 +557,7 @@ function App(){
     const token=LS.get("gh-token")||""; const gid=LS.get("gh-gist-id")||""; const pwd=LS.get("enc-pwd")||""; const ls=LS.get("last-synced")||"";
     setGhToken(token);setGhGistId(gid);setEncPwd(pwd);setLastSynced(ls);
     let local=normalizeData(saved);
+    const hasSavedLocal=!!saved;
     if(token&&gid&&pwd){
       setSyncStatus("syncing");
       try{
@@ -473,7 +565,8 @@ function App(){
         if(raw){
           const plain=await decryptStr(raw,pwd);
           const remote=normalizeData(JSON.parse(plain));
-          local=mergeData(local,remote);
+          // 新设备第一次打开时，本地只是自动生成的默认项目，不应该参与合并污染云端。
+          local=hasSavedLocal?mergeData(local,remote):remote;
           const enc=await encryptStr(JSON.stringify(local),pwd);
           await GH.update(token,gid,enc);
         }
@@ -525,7 +618,11 @@ function App(){
       if(mode==="new") id=await GH.create(ghToken.trim(),await encryptStr(JSON.stringify(data),encPwd));
       else {
         const raw=await GH.fetch(ghToken.trim(),existingId.trim());
-        if(raw){merged=mergeData(data,normalizeData(JSON.parse(await decryptStr(raw,encPwd))))}
+        if(raw){
+          const remote=normalizeData(JSON.parse(await decryptStr(raw,encPwd)));
+          // 如果本机只是首次加载出的默认空数据，连接已有 Gist 时以云端为准，避免默认项目重复注入。
+          merged=isPristineDefaultData(data)?remote:mergeData(data,remote);
+        }
         await GH.update(ghToken.trim(),existingId.trim(),await encryptStr(JSON.stringify(merged),encPwd));
       }
       setGhGistId(id.trim()); LS.set("gh-token",ghToken.trim()); LS.set("gh-gist-id",id.trim()); LS.set("enc-pwd",encPwd);
@@ -573,6 +670,11 @@ function LogTab({data,save}){
   const activeTasks=(data.tasks||[]).filter(t=>!t._deleted && !["done","dropped"].includes(t.status));
   const total=entries.reduce((s,e)=>s+Number(e.mins||0),0);
   const createProjectForLog=(projectName,assignToEdit=false)=>{
+    const existing=activeProjects(data.projects).find(p=>cleanProjectName(p.name)===cleanProjectName(projectName));
+    if(existing){
+      if(assignToEdit){setEdit(v=>v?{...v,projectId:String(existing.id)}:v);} else {setProjectId(String(existing.id));}
+      return existing.id;
+    }
     const np={id:uid(),name:projectName,type:"支持",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()};
     save({...data,projects:[np,...(data.projects||[])]});
     if(assignToEdit){setEdit(v=>v?{...v,projectId:String(np.id)}:v);} else {setProjectId(String(np.id));}
@@ -792,8 +894,14 @@ function ProjectsTab({data,save}){
   const statusColor=key=>({active:"#059669",paused:"#d97706",done:"#2563eb",archived:"#64748b"}[key]||"#64748b");
   const updateProject=(id,patch)=>save({...data,projects:projects.map(x=>String(x.id)===String(id)?{...x,...patch,updatedAt:nowTs()}:x)});
   const add=()=>{
-    if(!newName.trim())return;
-    const np={id:uid(),name:newName.trim(),type:"主线",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()};
+    const finalName=newName.trim();
+    if(!finalName)return;
+    const existing=visibleProjects.find(p=>cleanProjectName(p.name)===cleanProjectName(finalName));
+    if(existing){
+      setSelected(existing.id); setNewName(""); setMode("detail");
+      return;
+    }
+    const np={id:uid(),name:finalName,type:"主线",status:"active",goal:"",currentState:"",nextAction:"",stakeholders:[],tags:[],createdAt:today(),updatedAt:nowTs()};
     save({...data,projects:[np,...projects]});
     setSelected(np.id); setNewName(""); setMode("detail");
   };
