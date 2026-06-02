@@ -783,6 +783,82 @@ function TasksTab({data,save}){
   const active=tasks.filter(t=>t.status!=="done"&&t.status!=="dropped");
   const unassignedActive=active.filter(t=>!t.projectId);
   const doneTasks=tasks.filter(t=>t.status==="done");
+  const allLogsFlat=useMemo(()=>{
+    const out=[];
+    for(const [date,arr] of Object.entries(data.logs||{})){
+      for(const entry of arr||[]){
+        if(entry&&!entry._deleted) out.push({date,entry});
+      }
+    }
+    return out;
+  },[data.logs]);
+  const matchTitleKey=s=>String(s||"").toLowerCase().trim().replace(/[\s\-—_：:，,。\.、（）()\[\]【】《》<>]/g,"");
+  const getRelatedLogsForTask=useCallback((task)=>{
+    const found=[]; const seen=new Set();
+    const add=(date,entry,reason)=>{
+      if(!entry||entry._deleted)return;
+      const key=`${date}-${entry.id}`;
+      if(seen.has(key))return;
+      seen.add(key); found.push({date,entry,reason,key});
+    };
+    const ref=task.loggedLogRef;
+    if(ref){
+      for(const item of allLogsFlat){
+        if(String(item.date)===String(ref.date)&&String(item.entry.id)===String(ref.entryId)){
+          add(item.date,item.entry,"记录引用");
+        }
+      }
+    }
+    for(const item of allLogsFlat){
+      if(item.entry.sourceTaskId&&String(item.entry.sourceTaskId)===String(task.id)){
+        add(item.date,item.entry,"待办来源");
+      }
+    }
+    const tk=matchTitleKey(task.title);
+    if(tk&&tk.length>=4){
+      for(const item of allLogsFlat){
+        const lk=matchTitleKey(item.entry.name);
+        if(!lk)continue;
+        const exact=lk===tk;
+        const loose=(tk.length>=8&&lk.includes(tk))||(lk.length>=8&&tk.includes(lk));
+        const sameDoneDate=task.doneAt&&String(task.doneAt)===String(item.date);
+        if(exact || loose || (sameDoneDate&&tk.length>=5&&(lk.includes(tk)||tk.includes(lk)))){
+          add(item.date,item.entry,exact?"标题完全匹配":"标题近似匹配");
+        }
+      }
+    }
+    return found.sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b.entry.updatedAt||0)-(a.entry.updatedAt||0));
+  },[allLogsFlat]);
+  const applyDoneProjectRepair=(ids,projectId,mode="manual")=>{
+    const idSet=new Set((ids||[]).map(String));
+    if(!idSet.size)return;
+    const selectedTasks=tasks.filter(t=>idSet.has(String(t.id)));
+    const taskTarget=new Map();
+    for(const t of selectedTasks){
+      let target=projectId||null;
+      if(mode==="fromLog"){
+        const logs=getRelatedLogsForTask(t);
+        const logWithProject=logs.find(x=>x.entry.projectId);
+        target=logWithProject?.entry.projectId || t.projectId || projectId || null;
+      }else if(mode==="fromTask"){
+        target=t.projectId || projectId || null;
+      }
+      taskTarget.set(String(t.id),target||null);
+    }
+    const newTasks=(data.tasks||[]).map(t=>idSet.has(String(t.id))?{...t,projectId:taskTarget.get(String(t.id))||null,updatedAt:nowTs()}:t);
+    let logPatch=new Map();
+    for(const t of selectedTasks){
+      const target=taskTarget.get(String(t.id))||null;
+      for(const x of getRelatedLogsForTask(t)){
+        logPatch.set(`${x.date}-${x.entry.id}`,target);
+      }
+    }
+    const newLogs=Object.fromEntries(Object.entries(data.logs||{}).map(([date,arr])=>[date,(arr||[]).map(e=>{
+      const key=`${date}-${e.id}`;
+      return logPatch.has(key)?{...e,projectId:logPatch.get(key),updatedAt:nowTs()}:e;
+    })]));
+    save({...data,tasks:newTasks,logs:newLogs});
+  };
   const assignTasksProject=(ids,projectId,opts={})=>{
     const idSet=new Set((ids||[]).map(String));
     if(!idSet.size)return;
@@ -849,7 +925,7 @@ function TasksTab({data,save}){
     </div>
     {organize&&<OrganizeModal task={organize} setTask={setOrganize} projects={projects} onSave={saveOrganize} onClose={()=>setOrganize(null)} remaining={inbox.length}/>} 
     {projectOrganize&&<TaskProjectOrganizeModal tasks={unassignedActive} projects={projects} title="整理未完成待办归属" sub="把已经进入今天/近期/等待等状态、但还没有归属项目的待办集中整理。" emptyText="当前没有无项目归属的未完成待办。" initialSelectAll={true} onAssign={(ids,projectId)=>assignTasksProject(ids,projectId,{syncLogs:false})} onClose={()=>setProjectOrganize(false)}/>}
-    {doneProjectOrganize&&<TaskProjectOrganizeModal tasks={sorted(doneTasks)} projects={projects} title="整理已完成事项归属" sub="用于修复已完成待办的项目归属。批量修改会同步更新由该待办生成的每日记录项目归属。" emptyText="当前没有已完成事项。" initialSelectAll={false} onAssign={(ids,projectId)=>assignTasksProject(ids,projectId,{syncLogs:true})} onClose={()=>setDoneProjectOrganize(false)}/>}
+    {doneProjectOrganize&&<DoneProjectRepairModal tasks={sorted(doneTasks)} projects={projects} getRelatedLogs={getRelatedLogsForTask} onApply={applyDoneProjectRepair} onClose={()=>setDoneProjectOrganize(false)}/>}
     {edit&&<TaskEditModal task={edit} setTask={setEdit} projects={projects} onSave={()=>{updateTask(edit.id,edit);setEdit(null)}} onDelete={()=>{removeTask(edit.id);setEdit(null)}} onClose={()=>setEdit(null)}/>} 
   </>
 }
@@ -910,6 +986,113 @@ function TaskProjectOrganizeModal({tasks,projects,onAssign,onClose,title="整理
     <button style={{...S.btnFull("#f3f4f6","#374151"),marginTop:10}} onClick={onClose}>关闭</button>
   </div></div>
 }
+
+
+function DoneProjectRepairModal({tasks,projects,getRelatedLogs,onApply,onClose}){
+  const projectLabel=id=>projects.find(p=>String(p.id)===String(id))?.name || (id?"已删除/不可见项目":"无项目");
+  const buildRows=()=>tasks.map(t=>{
+    const relatedLogs=getRelatedLogs(t)||[];
+    const taskProject=t.projectId||null;
+    const logProjects=[...new Set(relatedLogs.map(x=>x.entry.projectId||null))];
+    const hasLinked=relatedLogs.length>0;
+    const mismatch=hasLinked && logProjects.some(pid=>String(pid||"")!==String(taskProject||""));
+    const noProject=!taskProject;
+    const noLinked=relatedLogs.length===0;
+    const needsRepair=noProject || mismatch;
+    return {task:t,relatedLogs,taskProject,logProjects,hasLinked,mismatch,noProject,noLinked,needsRepair};
+  });
+  const initialRows=buildRows();
+  const [filter,setFilter]=useState("repair");
+  const [query,setQuery]=useState("");
+  const [selected,setSelected]=useState(()=>Object.fromEntries(initialRows.filter(r=>r.needsRepair).map(r=>[String(r.task.id),true])));
+  const [target,setTarget]=useState(projects[0]?.id||"");
+  const rows=buildRows();
+  const filteredRows=rows.filter(r=>{
+    if(filter==="repair"&&!r.needsRepair)return false;
+    if(filter==="unassigned"&&!r.noProject)return false;
+    if(filter==="mismatch"&&!r.mismatch)return false;
+    if(filter==="linked"&&!r.hasLinked)return false;
+    const q=query.trim();
+    if(!q)return true;
+    const logText=r.relatedLogs.map(x=>`${x.date} ${x.entry.name} ${projectLabel(x.entry.projectId)} ${x.reason}`).join(" ");
+    return [r.task.title,r.task.note,r.task.nextAction,r.task.waitingFor,projectLabel(r.task.projectId),statusDef(r.task.status).label,logText].some(x=>String(x||"").includes(q));
+  });
+  const selectedIds=Object.entries(selected).filter(([_,v])=>v).map(([id])=>id);
+  const toggle=id=>setSelected(v=>({...v,[String(id)]:!v[String(id)]}));
+  const selectAllCurrent=()=>setSelected(v=>({...v,...Object.fromEntries(filteredRows.map(r=>[String(r.task.id),true]))}));
+  const selectNoneCurrent=()=>setSelected(v=>({...v,...Object.fromEntries(filteredRows.map(r=>[String(r.task.id),false]))}));
+  const applyManual=()=>{if(!selectedIds.length||!target)return; onApply(selectedIds,target,"manual"); setSelected({});};
+  const applyFromLog=()=>{if(!selectedIds.length)return; onApply(selectedIds,null,"fromLog"); setSelected({});};
+  const applyFromTask=()=>{if(!selectedIds.length)return; onApply(selectedIds,null,"fromTask"); setSelected({});};
+  const filterBtn=(key,label,count)=><button style={S.btnSm(filter===key?"#2563eb":"#f3f4f6",filter===key?"#fff":"#374151")} onClick={()=>setFilter(key)}>{label} {count}</button>;
+  const repairCount=rows.filter(r=>r.needsRepair).length;
+  const mismatchCount=rows.filter(r=>r.mismatch).length;
+  const unassignedCount=rows.filter(r=>r.noProject).length;
+  const linkedCount=rows.filter(r=>r.hasLinked).length;
+  return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}>
+    <CardTitle sub="专门修已完成待办的项目归属。这里会同时显示它可能对应的每日记录；批量应用后，会把已完成待办和关联每日记录一起改到同一项目。">整理已完成事项归属</CardTitle>
+    {tasks.length===0?<div style={{fontSize:13,color:"#9ca3af",padding:24,textAlign:"center",background:"#f9fafb",borderRadius:10}}>当前没有已完成事项。</div>:<>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        {filterBtn("repair","待修复",repairCount)}
+        {filterBtn("unassigned","无项目",unassignedCount)}
+        {filterBtn("mismatch","待办/日志不一致",mismatchCount)}
+        {filterBtn("linked","有关联日志",linkedCount)}
+        {filterBtn("all","全部",rows.length)}
+      </div>
+      <input style={{...S.input,marginBottom:10}} placeholder="搜索标题、备注、项目、关联日志…" value={query} onChange={e=>setQuery(e.target.value)}/>
+      <label style={S.label}>批量归属到</label>
+      <div style={{display:"flex",gap:8,marginBottom:8}}>
+        <div style={{flex:1}}><ProjectSelect projects={projects} value={target} onChange={setTarget}/></div>
+        <button style={S.btn("#2563eb")} onClick={applyManual} disabled={!target||!selectedIds.length}>应用到已选</button>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        <button style={S.btnSm()} onClick={selectAllCurrent}>全选当前</button>
+        <button style={S.btnSm()} onClick={selectNoneCurrent}>取消当前</button>
+        <button style={S.btnSm("#f3f4f6","#374151")} onClick={applyFromLog} disabled={!selectedIds.length}>用日志项目修复已选</button>
+        <button style={S.btnSm("#f3f4f6","#374151")} onClick={applyFromTask} disabled={!selectedIds.length}>用待办项目同步日志</button>
+        <span style={{fontSize:12,color:"#9ca3af",alignSelf:"center"}}>已选 {selectedIds.length} / 当前显示 {filteredRows.length} / 全部 {rows.length}</span>
+      </div>
+      <div style={{maxHeight:"50vh",overflowY:"auto",paddingRight:2}}>
+        {filteredRows.map(r=>{
+          const t=r.task;
+          const firstLogProject=r.relatedLogs.find(x=>x.entry.projectId)?.entry.projectId||null;
+          return <div key={t.id} style={{padding:10,background:"#f9fafb",borderRadius:9,marginBottom:8,border:r.needsRepair?"1px solid #fbbf24":"1px solid #e5e7eb"}}>
+            <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+              <input type="checkbox" checked={!!selected[String(t.id)]} onChange={()=>toggle(t.id)} style={{marginTop:2}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:800,wordBreak:"break-word"}}>{t.title}</div>
+                <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>
+                  <StatusPill status={t.status}/>{t.doneAt&&<span style={{marginLeft:6}}>完成：{t.doneAt}</span>}
+                  {r.noProject&&<span style={{marginLeft:6,color:"#dc2626"}}>待办无项目</span>}
+                  {r.mismatch&&<span style={{marginLeft:6,color:"#d97706"}}>待办/日志不一致</span>}
+                  {r.noLinked&&<span style={{marginLeft:6,color:"#9ca3af"}}>未找到关联日志</span>}
+                </div>
+                <div style={{fontSize:12,color:"#374151",marginTop:6}}>
+                  待办项目：<b>{projectLabel(t.projectId)}</b>
+                </div>
+                {r.relatedLogs.length>0?<div style={{fontSize:12,color:"#6b7280",marginTop:6,borderLeft:"2px solid #e5e7eb",paddingLeft:8}}>
+                  {r.relatedLogs.slice(0,4).map(x=><div key={x.key} style={{marginBottom:3}}>
+                    {x.date} · {x.entry.name} · 日志项目：<b>{projectLabel(x.entry.projectId)}</b> · {x.reason}
+                  </div>)}
+                  {r.relatedLogs.length>4&&<div style={{color:"#9ca3af"}}>另有 {r.relatedLogs.length-4} 条关联日志未展开</div>}
+                </div>:<div style={{fontSize:12,color:"#9ca3af",marginTop:6}}>没有找到可同步的每日记录；应用后只会修改这个待办。</div>}
+                {t.note&&<div style={{fontSize:12,color:"#6b7280",marginTop:6,whiteSpace:"pre-wrap",maxHeight:54,overflow:"hidden"}}>{t.note}</div>}
+                <div style={{display:"flex",gap:6,alignItems:"center",marginTop:8}}>
+                  <div style={{flex:1}}><ProjectSelect projects={projects} value={t.projectId} onChange={v=>onApply([String(t.id)],v,"manual")}/></div>
+                  {firstLogProject&&<button style={S.btnSm("#ecfdf5","#047857")} onClick={()=>onApply([String(t.id)],null,"fromLog")}>用日志项目</button>}
+                </div>
+              </div>
+            </div>
+          </div>
+        })}
+      </div>
+      {filteredRows.length===0&&<div style={{fontSize:12,color:"#9ca3af",padding:16,textAlign:"center",background:"#f9fafb",borderRadius:9}}>没有匹配项</div>}
+    </>}
+    <button style={{...S.btnFull("#f3f4f6","#374151"),marginTop:10}} onClick={onClose}>关闭</button>
+  </div></div>
+}
+
+
 
 function OrganizeModal({task,setTask,projects,onSave,onClose,remaining}){return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle sub={`收件箱还有 ${remaining} 项。只需要判断归到哪里，不必写完美。`}>整理收件箱</CardTitle><div style={{padding:12,background:"#f9fafb",borderRadius:10,marginBottom:12,fontSize:15,fontWeight:800}}>{task.title}</div><label style={S.label}>项目（可选）</label><div style={{marginBottom:10}}><ProjectSelect projects={projects} value={task.projectId} onChange={v=>setTask({...task,projectId:v})}/></div><label style={S.label}>下一步（可选）</label><input style={{...S.input,marginBottom:10}} value={task.nextAction||""} onChange={e=>setTask({...task,nextAction:e.target.value})} placeholder="这件事下一步是什么？"/><label style={S.label}>等待对象（仅等待中需要）</label><input style={{...S.input,marginBottom:10}} value={task.waitingFor||""} onChange={e=>setTask({...task,waitingFor:e.target.value})} placeholder="等谁 / 等什么资料？"/><label style={S.label}>截止日（可选）</label><input type="date" style={{...S.input,marginBottom:10}} value={task.due||""} onChange={e=>setTask({...task,due:e.target.value||null})}/><label style={S.label}>备注（可选）</label><textarea style={{...S.textarea,marginBottom:12}} value={task.note||""} onChange={e=>setTask({...task,note:e.target.value})}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}><button style={S.btn("#2563eb")} onClick={()=>onSave("today")}>今天要碰</button><button style={S.btn("#7c3aed")} onClick={()=>onSave("next")}>近期推进</button><button style={S.btn("#d97706")} onClick={()=>onSave("waiting")}>等待中</button><button style={S.btn("#94a3b8")} onClick={()=>onSave("someday")}>以后再说</button><button style={S.btn("#dc2626")} onClick={()=>onSave("dropped")}>删除/放弃</button><button style={S.btn("#f3f4f6","#374151")} onClick={onClose}>退出</button></div></div></div>}
 function TaskEditModal({task,setTask,projects,onSave,onDelete,onClose}){return <div style={S.modal} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={S.modalBox}><CardTitle>编辑待办</CardTitle><label style={S.label}>标题</label><input style={{...S.input,marginBottom:10}} value={task.title} onChange={e=>setTask({...task,title:e.target.value})}/><label style={S.label}>状态</label><select style={{...S.select,marginBottom:10}} value={task.status} onChange={e=>setTask({...task,status:e.target.value})}>{TASK_STATUS.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select><label style={S.label}>项目</label><div style={{marginBottom:10}}><ProjectSelect projects={projects} value={task.projectId} onChange={v=>setTask({...task,projectId:v})}/></div><label style={S.label}>下一步</label><input style={{...S.input,marginBottom:10}} value={task.nextAction||""} onChange={e=>setTask({...task,nextAction:e.target.value})}/><label style={S.label}>等待对象</label><input style={{...S.input,marginBottom:10}} value={task.waitingFor||""} onChange={e=>setTask({...task,waitingFor:e.target.value})}/><label style={S.label}>截止日</label><input type="date" style={{...S.input,marginBottom:10}} value={task.due||""} onChange={e=>setTask({...task,due:e.target.value||null})}/><label style={S.label}>备注</label><textarea style={{...S.textarea,marginBottom:12}} value={task.note||""} onChange={e=>setTask({...task,note:e.target.value})}/><div style={{display:"flex",gap:8}}><button style={{...S.btn(),flex:1}} onClick={onSave}>保存</button><button style={{...S.btn("#dc2626"),flex:1}} onClick={onDelete}>删除</button><button style={{...S.btn("#f3f4f6","#374151"),flex:1}} onClick={onClose}>取消</button></div></div></div>}
