@@ -1252,7 +1252,11 @@ function ProjectsTab({data,save}){
         <ProjectEditFields proj={p}/>
         <button style={{...S.btnSm("#dc2626","#fff"),marginBottom:12}} onClick={()=>remove(p.id)}>删除项目</button>
         <RelSection title="相关待办" empty="暂无相关待办">{related.tasks.map(t=><div key={t.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><StatusPill status={t.status}/> {t.title}</div>)}</RelSection>
-        <RelSection title="相关日志" empty="暂无相关日志">{related.logs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,20).map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}>{e.date} · {e.name} · {fmtMins(e.mins)}</div>)}</RelSection>
+        <RelSection title="相关日志" empty="暂无相关日志">{related.logs.sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,20).map(e=><details key={e.id} style={{fontSize:13,padding:"8px 0",borderBottom:"1px solid #f3f4f6"}}>
+          <summary style={{cursor:"pointer",fontWeight:650,lineHeight:1.5}}>{e.date} · {e.name} · {fmtMins(e.mins)}</summary>
+          <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>分类：{(CATS.find(c=>c.key===e.cat)||{}).label||e.cat}{e.extractable?` · ${e.extractionStatus==="extracted"?"已提炼":e.extractionStatus==="ignored"?"已忽略":"可提炼"}`:""}</div>
+          {e.note?<div style={{fontSize:12,color:"#4b5563",marginTop:7,padding:"8px 10px",background:"#f9fafb",borderLeft:"2px solid #e5e7eb",borderRadius:8,whiteSpace:"pre-wrap",lineHeight:1.65}}>{e.note}</div>:<div style={{fontSize:12,color:"#9ca3af",marginTop:7,padding:"8px 10px",background:"#f9fafb",borderRadius:8}}>这条日志没有备注记录。</div>}
+        </details>)}</RelSection>
         <RelSection title="相关知识" empty="暂无相关知识">{related.knowledge.map(e=><div key={e.id} style={{fontSize:13,padding:"7px 0",borderBottom:"1px solid #f3f4f6"}}><b>{e.title||e.themeName}</b><div style={{fontSize:12,color:"#6b7280",marginTop:3}}>{e.entryType} · {e.confidence}</div></div>)}</RelSection>
       </div>}
     </div>}
